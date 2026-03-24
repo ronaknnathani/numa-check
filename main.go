@@ -88,7 +88,7 @@ func runAnalysis(pid int) {
 	// Check if the process is pinned to a subset of system CPUs.
 	systemCPUs, err := getSystemCPUCount()
 	if err != nil {
-		fmt.Printf("Error reading system CPU count: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: could not determine system CPU count: %v\n", err)
 	} else if len(affinityList) < systemCPUs {
 		fmt.Printf("Process is pinned to %d of %d system CPUs.\n", len(affinityList), systemCPUs)
 	} else {
@@ -118,35 +118,30 @@ func runAnalysis(pid int) {
 	if printNumastat {
 		numastatOut, err := exec.Command("numastat", "-p", fmt.Sprintf("%d", pid)).Output()
 		if err != nil {
-			fmt.Printf("Error running numastat: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error running numastat: %v\n", execStderr(err))
 		} else {
 			fmt.Printf("\nNUMA Stats:\n%s\n", string(numastatOut))
 		}
 	}
 
-	// Physical core and package analysis from sysfs topology.
-	uniqueCores := make(map[string]bool)
+	// Physical core, package, and NUMA distribution analysis.
+	uniqueCores := make(map[CoreInfo]bool)
 	uniquePackages := make(map[int]bool)
+	numaNodes := make(map[int]bool)
 	for _, cpu := range affinityList {
 		info, err := getCPUTopology(cpu)
 		if err != nil {
-			fmt.Printf("Error reading topology for CPU %d: %v\n", cpu, err)
+			fmt.Fprintf(os.Stderr, "Warning: cannot read topology for CPU %d: %v\n", cpu, err)
 			continue
 		}
-		key := fmt.Sprintf("%d-%d", info.PhysicalID, info.CoreID)
-		uniqueCores[key] = true
+		uniqueCores[info] = true
 		uniquePackages[info.PhysicalID] = true
-	}
-	fmt.Printf("Unique physical cores: %d, unique packages (sockets): %d\n",
-		len(uniqueCores), len(uniquePackages))
-
-	// NUMA distribution of allowed CPUs.
-	numaNodes := make(map[int]bool)
-	for _, cpu := range affinityList {
 		if node, ok := numaMap[cpu]; ok {
 			numaNodes[node] = true
 		}
 	}
+	fmt.Printf("Unique physical cores: %d, unique packages (sockets): %d\n",
+		len(uniqueCores), len(uniquePackages))
 	var nodes []int
 	for node := range numaNodes {
 		nodes = append(nodes, node)
@@ -157,7 +152,7 @@ func runAnalysis(pid int) {
 	// GPU analysis (optional).
 	if gpuCheck {
 		fmt.Println("\nGPU NUMA Analysis:")
-		runGPUAnalysis(pid, cpuNUMANode)
+		runGPUAnalysis(pid, numaNodes)
 	}
 }
 
@@ -199,7 +194,11 @@ func getCurrentCPU(pid int) (int, error) {
 
 // getSystemCPUCount returns the total number of CPUs on the system.
 func getSystemCPUCount() (int, error) {
-	cpus, err := expandCPUList(readSysfsString("/sys/devices/system/cpu/possible"))
+	data, err := os.ReadFile("/sys/devices/system/cpu/possible")
+	if err != nil {
+		return 0, err
+	}
+	cpus, err := expandCPUList(strings.TrimSpace(string(data)))
 	if err != nil {
 		return 0, err
 	}
@@ -221,16 +220,25 @@ func buildNUMAMap() (map[int]int, error) {
 		nodeName := filepath.Base(nodePath)
 		nodeID, err := strconv.Atoi(strings.TrimPrefix(nodeName, "node"))
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: skipping %s: cannot parse node ID: %v\n", nodeName, err)
 			continue
 		}
-		cpulistPath := filepath.Join(nodePath, "cpulist")
-		cpus, err := expandCPUList(readSysfsString(cpulistPath))
+		cpulistData, err := os.ReadFile(filepath.Join(nodePath, "cpulist"))
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: skipping NUMA node %d: cannot read cpulist: %v\n", nodeID, err)
+			continue
+		}
+		cpus, err := expandCPUList(strings.TrimSpace(string(cpulistData)))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: skipping NUMA node %d: cannot parse cpulist: %v\n", nodeID, err)
 			continue
 		}
 		for _, cpu := range cpus {
 			cpuToNode[cpu] = nodeID
 		}
+	}
+	if len(cpuToNode) == 0 {
+		return nil, fmt.Errorf("NUMA nodes found in sysfs but none could be parsed")
 	}
 	return cpuToNode, nil
 }
@@ -258,13 +266,12 @@ func readIntFile(path string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(data)))
 }
 
-// readSysfsString reads a sysfs file and returns its trimmed contents.
-func readSysfsString(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
+// execStderr extracts stderr from an exec.ExitError, or returns the error as-is.
+func execStderr(err error) error {
+	if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
 	}
-	return strings.TrimSpace(string(data))
+	return err
 }
 
 // expandCPUList parses a CPU list string like "0-3,8-11" into individual CPU IDs.
@@ -304,10 +311,10 @@ func expandCPUList(s string) ([]int, error) {
 
 // GPU analysis functions.
 
-func runGPUAnalysis(pid int, cpuNUMANode int) {
+func runGPUAnalysis(pid int, allowedNUMANodes map[int]bool) {
 	allowedGPUs, err := getAllowedGPUs(pid)
 	if err != nil {
-		fmt.Printf("Error reading process environment: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error reading process environment: %v\n", err)
 		return
 	}
 	if len(allowedGPUs) == 0 {
@@ -318,7 +325,7 @@ func runGPUAnalysis(pid int, cpuNUMANode int) {
 
 	gpuMap, err := getGPUInfo()
 	if err != nil {
-		fmt.Printf("Error retrieving GPU info via nvidia-smi: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error retrieving GPU info via nvidia-smi: %v\n", err)
 		return
 	}
 
@@ -331,18 +338,18 @@ func runGPUAnalysis(pid int, cpuNUMANode int) {
 	for _, gpuUUID := range allowedGPUs {
 		pciID, found := gpuMap[gpuUUID]
 		if !found {
-			fmt.Printf("GPU %s not found in nvidia-smi output.\n", gpuUUID)
+			fmt.Fprintf(os.Stderr, "Warning: GPU %s not found in nvidia-smi output\n", gpuUUID)
 			continue
 		}
 		gpuNUMANode, err := readIntFile(filepath.Join("/sys/bus/pci/devices", pciID, "numa_node"))
 		if err != nil {
-			fmt.Printf("Error reading NUMA node for GPU %s (PCI: %s): %v\n", gpuUUID, pciID, err)
+			fmt.Fprintf(os.Stderr, "Error reading NUMA node for GPU %s (PCI: %s): %v\n", gpuUUID, pciID, err)
 			continue
 		}
-		if gpuNUMANode == cpuNUMANode {
-			fmt.Printf("GPU %s (PCI: %s): NUMA node %d (same as CPU)\n", gpuUUID, pciID, gpuNUMANode)
+		if allowedNUMANodes[gpuNUMANode] {
+			fmt.Printf("GPU %s (PCI: %s): NUMA node %d (within allowed CPU NUMA nodes)\n", gpuUUID, pciID, gpuNUMANode)
 		} else {
-			fmt.Printf("GPU %s (PCI: %s): NUMA node %d (DIFFERENT from CPU node %d)\n", gpuUUID, pciID, gpuNUMANode, cpuNUMANode)
+			fmt.Printf("GPU %s (PCI: %s): NUMA node %d (OUTSIDE allowed CPU NUMA nodes)\n", gpuUUID, pciID, gpuNUMANode)
 		}
 	}
 }
@@ -353,12 +360,12 @@ func getAllowedGPUs(pid int) ([]string, error) {
 		return nil, err
 	}
 	for _, env := range strings.Split(string(data), "\x00") {
-		if strings.HasPrefix(env, "NVIDIA_VISIBLE_DEVICES=") {
-			parts := strings.SplitN(env, "=", 2)
-			if len(parts) != 2 {
-				return nil, fmt.Errorf("unexpected format in NVIDIA_VISIBLE_DEVICES")
+		if val, ok := strings.CutPrefix(env, "NVIDIA_VISIBLE_DEVICES="); ok {
+			val = strings.TrimSpace(val)
+			if val == "" || val == "none" || val == "void" {
+				return nil, nil
 			}
-			return strings.Split(parts[1], ","), nil
+			return strings.Split(val, ","), nil
 		}
 	}
 	return nil, nil
@@ -367,7 +374,7 @@ func getAllowedGPUs(pid int) ([]string, error) {
 func getGPUInfo() (map[string]string, error) {
 	out, err := exec.Command("nvidia-smi", "--query-gpu=uuid,pci.bus_id", "--format=csv,noheader").Output()
 	if err != nil {
-		return nil, err
+		return nil, execStderr(err)
 	}
 	gpuMap := make(map[string]string)
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -395,7 +402,7 @@ func normalizePCI(pciID string) string {
 func getPIDFromContainer(podName, containerName string) (int, error) {
 	out, err := exec.Command("crictl", "ps", "-o", "json").Output()
 	if err != nil {
-		return 0, fmt.Errorf("failed to run crictl ps: %v", err)
+		return 0, fmt.Errorf("failed to run crictl ps: %v", execStderr(err))
 	}
 
 	var psOut CrictlPSOutput
@@ -418,7 +425,7 @@ func getPIDFromContainer(podName, containerName string) (int, error) {
 
 	inspectOut, err := exec.Command("crictl", "inspect", targetContainerID, "-o", "json").Output()
 	if err != nil {
-		return 0, fmt.Errorf("crictl inspect failed: %v", err)
+		return 0, fmt.Errorf("crictl inspect failed: %v", execStderr(err))
 	}
 
 	var inspectData map[string]interface{}
