@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 )
@@ -36,10 +37,17 @@ type CoreInfo struct {
 	CoreID     int
 }
 
+type GPUDevice struct {
+	UUID     string
+	PCIID    string
+	NUMANode int
+}
+
 type NUMANodeInfo struct {
 	ID       int
 	SocketID int
 	CPUs     []int // sorted
+	GPUs     []GPUDevice
 }
 
 // ANSI color codes.
@@ -120,7 +128,9 @@ func runTopoOnly() {
 	if err != nil {
 		log.Fatalf("Error reading NUMA topology: %v", err)
 	}
-	nodes := buildNUMANodes(numaMap)
+
+	gpus := discoverGPUs()
+	nodes := buildNUMANodes(numaMap, gpus)
 
 	totalSockets := make(map[int]bool)
 	for _, n := range nodes {
@@ -130,37 +140,15 @@ func runTopoOnly() {
 	}
 
 	fmt.Printf("\n%s\n\n", col(ansiBold, "numa-check — Machine Topology"))
-	printSection("CPU Topology")
-	fmt.Printf("  %d CPUs, %d NUMA nodes, %d sockets\n\n", len(numaMap), len(nodes), len(totalSockets))
-	printNodesGrid(nodes, "machine", nil, -1)
+	printSection("Topology")
 
-	// Show GPU placement on the topology if nvidia-smi is available.
-	gpuMap, err := getGPUInfo()
-	if err == nil && len(gpuMap) > 0 {
-		// Build GPU-to-NUMA mapping.
-		type gpuInfo struct {
-			UUID     string
-			PCIID    string
-			NUMANode int
-		}
-		var gpus []gpuInfo
-		for uuid, pciID := range gpuMap {
-			node, err := readIntFile(filepath.Join("/sys/bus/pci/devices", pciID, "numa_node"))
-			if err != nil {
-				continue
-			}
-			gpus = append(gpus, gpuInfo{UUID: uuid, PCIID: pciID, NUMANode: node})
-		}
-		sort.Slice(gpus, func(i, j int) bool { return gpus[i].NUMANode < gpus[j].NUMANode })
-
-		fmt.Println()
-		printSection("GPU Topology")
-		fmt.Printf("  %d GPUs\n\n", len(gpus))
-		for _, g := range gpus {
-			fmt.Printf("  %s %s (PCI: %s) → NUMA Node %d\n",
-				col(ansiCyan, "■"), shortenUUID(g.UUID), g.PCIID, g.NUMANode)
-		}
+	summary := fmt.Sprintf("  %d CPUs, %d NUMA nodes, %d sockets", len(numaMap), len(nodes), len(totalSockets))
+	if len(gpus) > 0 {
+		summary += fmt.Sprintf(", %d GPUs", len(gpus))
 	}
+	fmt.Printf("%s\n\n", summary)
+
+	printNodesGrid(nodes, "machine", nil, -1, nil)
 	fmt.Println()
 }
 
@@ -188,7 +176,11 @@ func runAnalysis(pid int) {
 		log.Fatalf("CPU %d not found in NUMA topology", currentCPU)
 	}
 
-	nodes := buildNUMANodes(numaMap)
+	var gpus []GPUDevice
+	if gpuCheck {
+		gpus = discoverGPUs()
+	}
+	nodes := buildNUMANodes(numaMap, gpus)
 
 	allowedSet := make(map[int]bool, len(affinityList))
 	for _, cpu := range affinityList {
@@ -223,8 +215,12 @@ func runAnalysis(pid int) {
 	}
 
 	printSection("Machine Topology")
-	fmt.Printf("  %d CPUs, %d NUMA nodes, %d sockets\n\n", len(numaMap), len(nodes), len(totalSockets))
-	printNodesGrid(nodes, "machine", nil, -1)
+	summary := fmt.Sprintf("  %d CPUs, %d NUMA nodes, %d sockets", len(numaMap), len(nodes), len(totalSockets))
+	if len(gpus) > 0 {
+		summary += fmt.Sprintf(", %d GPUs", len(gpus))
+	}
+	fmt.Printf("%s\n\n", summary)
+	printNodesGrid(nodes, "machine", nil, -1, nil)
 
 	// Process section.
 	fmt.Println()
@@ -246,8 +242,8 @@ func runAnalysis(pid int) {
 	fmt.Printf("  NUMA span ............ %d node%s %v\n\n", len(sortedNodes), plural(len(sortedNodes)), sortedNodes)
 
 	fmt.Printf("  %s = allowed  %s = current  %s = not allowed\n\n",
-		col(ansiGreen, "■"), col(ansiBrightYellow, "★"), col(ansiDim, "·"))
-	printNodesGrid(nodes, "process", allowedSet, currentCPU)
+		col(ansiGreen, "■"), col(ansiBrightYellow, "★"), col(ansiDim, "□"))
+	printNodesGrid(nodes, "process", allowedSet, currentCPU, processNodes)
 
 	// Optional numastat.
 	if printNumastat {
@@ -261,13 +257,6 @@ func runAnalysis(pid int) {
 		}
 	}
 
-	// GPU analysis.
-	if gpuCheck {
-		fmt.Println()
-		printSection("GPU Locality")
-		printGPUAnalysis(pid, processNodes)
-	}
-
 	fmt.Println()
 }
 
@@ -278,25 +267,26 @@ func printSection(title string) {
 	fmt.Printf("  %s\n", col(ansiDim, strings.Repeat("─", len(title))))
 }
 
-const gridCols = 16
+const gridCols = 16 // CPUs per row in the topology grid
 
-func printNodesGrid(nodes []NUMANodeInfo, mode string, allowedSet map[int]bool, currentCPU int) {
+// processNodes is only used in "process" mode to color GPUs by NUMA locality.
+func printNodesGrid(nodes []NUMANodeInfo, mode string, allowedSet map[int]bool, currentCPU int, processNodes map[int]bool) {
 	for i := 0; i < len(nodes); i += 2 {
 		left := &nodes[i]
 		var right *NUMANodeInfo
 		if i+1 < len(nodes) {
 			right = &nodes[i+1]
 		}
-		printNodePair(left, right, mode, allowedSet, currentCPU)
+		printNodePair(left, right, mode, allowedSet, currentCPU, processNodes)
 		if i+2 < len(nodes) {
 			fmt.Println()
 		}
 	}
 }
 
-func printNodePair(left, right *NUMANodeInfo, mode string, allowedSet map[int]bool, currentCPU int) {
-	const colWidth = 24
-	const gap = "          "
+func printNodePair(left, right *NUMANodeInfo, mode string, allowedSet map[int]bool, currentCPU int, processNodes map[int]bool) {
+	const colWidth = 34 // visual width reserved for left column (16 CPUs * 2 - 1 = 31, plus padding)
+	const gap = "    "   // gap between side-by-side nodes
 
 	// Headers.
 	lh := nodeHeader(left)
@@ -306,7 +296,7 @@ func printNodePair(left, right *NUMANodeInfo, mode string, allowedSet map[int]bo
 		fmt.Printf("  %s\n", col(ansiBold, lh))
 	}
 
-	// Grid rows.
+	// CPU grid rows.
 	leftRows := renderGrid(left.CPUs, mode, allowedSet, currentCPU)
 	var rightRows []string
 	if right != nil {
@@ -323,7 +313,7 @@ func printNodePair(left, right *NUMANodeInfo, mode string, allowedSet map[int]bo
 		lWidth := 0
 		if r < len(leftRows) {
 			lRow = leftRows[r]
-			lWidth = gridRowWidth(left.CPUs, r)
+			lWidth = gridRowVisualWidth(left.CPUs, r)
 		}
 		if right != nil {
 			rRow := ""
@@ -336,13 +326,55 @@ func printNodePair(left, right *NUMANodeInfo, mode string, allowedSet map[int]bo
 		}
 	}
 
-	// Footers.
-	lf := nodeFooter(left, mode, allowedSet)
+	// CPU footer.
+	lcf := cpuFooter(left, mode, allowedSet)
 	if right != nil {
-		rf := nodeFooter(right, mode, allowedSet)
-		fmt.Printf("  %s%s%s\n", col(ansiDim, pad(lf, colWidth)), gap, col(ansiDim, rf))
+		rcf := cpuFooter(right, mode, allowedSet)
+		fmt.Printf("  %s%s%s\n", col(ansiDim, pad(lcf, colWidth)), gap, col(ansiDim, rcf))
 	} else {
-		fmt.Printf("  %s\n", col(ansiDim, lf))
+		fmt.Printf("  %s\n", col(ansiDim, lcf))
+	}
+
+	// GPU rows below, with their own footer.
+	if len(left.GPUs) > 0 || (right != nil && len(right.GPUs) > 0) {
+		fmt.Println()
+		leftGPURows, leftGPUWidths := renderGPURows(left.GPUs, mode, left.ID, processNodes)
+		var rightGPURows []string
+		if right != nil {
+			rightGPURows, _ = renderGPURows(right.GPUs, mode, right.ID, processNodes)
+		}
+
+		maxGPURows := len(leftGPURows)
+		if len(rightGPURows) > maxGPURows {
+			maxGPURows = len(rightGPURows)
+		}
+
+		for r := 0; r < maxGPURows; r++ {
+			lRow := ""
+			lWidth := 0
+			if r < len(leftGPURows) {
+				lRow = leftGPURows[r]
+				lWidth = leftGPUWidths[r]
+			}
+			if right != nil {
+				rRow := ""
+				if r < len(rightGPURows) {
+					rRow = rightGPURows[r]
+				}
+				fmt.Printf("  %s%s%s%s\n", lRow, strings.Repeat(" ", colWidth-lWidth), gap, rRow)
+			} else if lRow != "" {
+				fmt.Printf("  %s\n", lRow)
+			}
+		}
+
+		// GPU footer.
+		lgf := gpuFooter(left)
+		if right != nil {
+			rgf := gpuFooter(right)
+			fmt.Printf("  %s%s%s\n", col(ansiDim, pad(lgf, colWidth)), gap, col(ansiDim, rgf))
+		} else if lgf != "" {
+			fmt.Printf("  %s\n", col(ansiDim, lgf))
+		}
 	}
 }
 
@@ -354,7 +386,7 @@ func nodeHeader(n *NUMANodeInfo) string {
 	return h
 }
 
-func nodeFooter(n *NUMANodeInfo, mode string, allowedSet map[int]bool) string {
+func cpuFooter(n *NUMANodeInfo, mode string, allowedSet map[int]bool) string {
 	if mode == "process" {
 		count := 0
 		for _, cpu := range n.CPUs {
@@ -362,9 +394,56 @@ func nodeFooter(n *NUMANodeInfo, mode string, allowedSet map[int]bool) string {
 				count++
 			}
 		}
-		return fmt.Sprintf("%d allowed", count)
+		return fmt.Sprintf("%d of %d CPUs", count, len(n.CPUs))
 	}
 	return fmt.Sprintf("%d CPUs (%d–%d)", len(n.CPUs), n.CPUs[0], n.CPUs[len(n.CPUs)-1])
+}
+
+func gpuFooter(n *NUMANodeInfo) string {
+	if len(n.GPUs) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d GPUs", len(n.GPUs))
+}
+
+// renderGPURows renders GPU labels in rows of 2, fitting under the CPU grid.
+// Returns the rendered strings and their visual widths.
+func renderGPURows(gpus []GPUDevice, mode string, nodeID int, processNodes map[int]bool) ([]string, []int) {
+	if len(gpus) == 0 {
+		return nil, nil
+	}
+	var rows []string
+	var widths []int
+	for i := 0; i < len(gpus); i += 2 {
+		var sb strings.Builder
+		width := 0
+		for j := 0; j < 2 && i+j < len(gpus); j++ {
+			gpu := gpus[i+j]
+			if j > 0 {
+				sb.WriteString("    ")
+				width += 4
+			}
+			suffix := ""
+			if gpu.NUMANode < 0 {
+				suffix = " ?"
+			}
+			block := fmt.Sprintf("▀▀ GPU %d%s", i+j, suffix)
+			switch mode {
+			case "machine":
+				sb.WriteString(col(ansiGreen, block))
+			case "process":
+				if processNodes[nodeID] {
+					sb.WriteString(col(ansiGreen, block))
+				} else {
+					sb.WriteString(col(ansiRed, block))
+				}
+			}
+			width += utf8.RuneCountInString(block)
+		}
+		rows = append(rows, sb.String())
+		widths = append(widths, width)
+	}
+	return rows, widths
 }
 
 func renderGrid(cpus []int, mode string, allowedSet map[int]bool, currentCPU int) []string {
@@ -375,17 +454,20 @@ func renderGrid(cpus []int, mode string, allowedSet map[int]bool, currentCPU int
 			end = len(cpus)
 		}
 		var sb strings.Builder
-		for _, cpu := range cpus[i:end] {
+		for j, cpu := range cpus[i:end] {
+			if j > 0 {
+				sb.WriteString(" ")
+			}
 			switch mode {
 			case "machine":
-				sb.WriteString(col(ansiCyan, "█"))
+				sb.WriteString(col(ansiCyan, "■"))
 			case "process":
 				if cpu == currentCPU {
 					sb.WriteString(col(ansiBrightYellow, "★"))
 				} else if allowedSet[cpu] {
 					sb.WriteString(col(ansiGreen, "■"))
 				} else {
-					sb.WriteString(col(ansiDim, "·"))
+					sb.WriteString(col(ansiDim, "□"))
 				}
 			}
 		}
@@ -394,20 +476,25 @@ func renderGrid(cpus []int, mode string, allowedSet map[int]bool, currentCPU int
 	return rows
 }
 
-func gridRowWidth(cpus []int, row int) int {
+// gridRowVisualWidth returns the visual width of a grid row (chars + spaces).
+func gridRowVisualWidth(cpus []int, row int) int {
 	start := row * gridCols
-	remaining := len(cpus) - start
-	if remaining > gridCols {
-		return gridCols
+	n := len(cpus) - start
+	if n > gridCols {
+		n = gridCols
 	}
-	return remaining
+	if n <= 0 {
+		return 0
+	}
+	return n*2 - 1 // each char + space, minus trailing space
 }
 
 func pad(s string, width int) string {
-	if len(s) >= width {
+	n := utf8.RuneCountInString(s)
+	if n >= width {
 		return s
 	}
-	return s + strings.Repeat(" ", width-len(s))
+	return s + strings.Repeat(" ", width-n)
 }
 
 func plural(n int) string {
@@ -426,10 +513,23 @@ func sortedKeys(m map[int]bool) []int {
 	return keys
 }
 
-func buildNUMANodes(numaMap map[int]int) []NUMANodeInfo {
+func buildNUMANodes(numaMap map[int]int, gpus []GPUDevice) []NUMANodeInfo {
 	nodeCPUs := make(map[int][]int)
 	for cpu, node := range numaMap {
 		nodeCPUs[node] = append(nodeCPUs[node], cpu)
+	}
+	// Group GPUs by NUMA node. GPUs with unknown NUMA (-1) go to all nodes.
+	nodeGPUs := make(map[int][]GPUDevice)
+	for _, g := range gpus {
+		if _, exists := nodeCPUs[g.NUMANode]; exists {
+			nodeGPUs[g.NUMANode] = append(nodeGPUs[g.NUMANode], g)
+		} else {
+			// GPU has unknown NUMA affinity (-1) or doesn't match a node.
+			// Attach to all nodes so it's still visible.
+			for nodeID := range nodeCPUs {
+				nodeGPUs[nodeID] = append(nodeGPUs[nodeID], g)
+			}
+		}
 	}
 	var nodes []NUMANodeInfo
 	for id, cpus := range nodeCPUs {
@@ -440,10 +540,41 @@ func buildNUMANodes(numaMap map[int]int) []NUMANodeInfo {
 				socketID = info.PhysicalID
 			}
 		}
-		nodes = append(nodes, NUMANodeInfo{ID: id, SocketID: socketID, CPUs: cpus})
+		nodes = append(nodes, NUMANodeInfo{ID: id, SocketID: socketID, CPUs: cpus, GPUs: nodeGPUs[id]})
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	return nodes
+}
+
+func discoverGPUs() []GPUDevice {
+	gpuMap, err := getGPUInfo()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not query GPUs: %v\n", err)
+		return nil
+	}
+	if len(gpuMap) == 0 {
+		fmt.Fprintf(os.Stderr, "Warning: nvidia-smi returned no GPUs\n")
+		return nil
+	}
+	var gpus []GPUDevice
+	for uuid, pciID := range gpuMap {
+		node, err := readIntFile(filepath.Join("/sys/bus/pci/devices", pciID, "numa_node"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: cannot read NUMA node for GPU %s (PCI: %s): %v\n", uuid, pciID, err)
+			node = -1
+		}
+		if node == -1 {
+			fmt.Fprintf(os.Stderr, "Warning: GPU %s reports NUMA node -1 (affinity unknown)\n", pciID)
+		}
+		gpus = append(gpus, GPUDevice{UUID: uuid, PCIID: pciID, NUMANode: node})
+	}
+	sort.Slice(gpus, func(i, j int) bool {
+		if gpus[i].NUMANode != gpus[j].NUMANode {
+			return gpus[i].NUMANode < gpus[j].NUMANode
+		}
+		return gpus[i].PCIID < gpus[j].PCIID
+	})
+	return gpus
 }
 
 // Data collection functions.
@@ -593,77 +724,7 @@ func expandCPUList(s string) ([]int, error) {
 	return cpus, nil
 }
 
-// GPU analysis.
-
-func printGPUAnalysis(pid int, allowedNUMANodes map[int]bool) {
-	allowedGPUs, err := getAllowedGPUs(pid)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Error reading process environment: %v\n", err)
-		return
-	}
-	if len(allowedGPUs) == 0 {
-		fmt.Println("  NVIDIA_VISIBLE_DEVICES not set; checking all GPUs.")
-	} else {
-		fmt.Printf("  Allowed GPUs: %d\n", len(allowedGPUs))
-	}
-
-	gpuMap, err := getGPUInfo()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Error retrieving GPU info: %v\n", err)
-		return
-	}
-
-	if len(allowedGPUs) == 0 {
-		for uuid := range gpuMap {
-			allowedGPUs = append(allowedGPUs, uuid)
-		}
-	}
-
-	for _, gpuUUID := range allowedGPUs {
-		pciID, found := gpuMap[gpuUUID]
-		if !found {
-			fmt.Fprintf(os.Stderr, "  Warning: GPU %s not found in nvidia-smi output\n", gpuUUID)
-			continue
-		}
-		gpuNUMANode, err := readIntFile(filepath.Join("/sys/bus/pci/devices", pciID, "numa_node"))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Error reading NUMA node for GPU %s (PCI: %s): %v\n", gpuUUID, pciID, err)
-			continue
-		}
-		short := shortenUUID(gpuUUID)
-		if allowedNUMANodes[gpuNUMANode] {
-			fmt.Printf("  %s %s (PCI: %s) → NUMA Node %d %s\n",
-				col(ansiGreen, "✓"), short, pciID, gpuNUMANode, col(ansiGreen, "same NUMA"))
-		} else {
-			fmt.Printf("  %s %s (PCI: %s) → NUMA Node %d %s\n",
-				col(ansiRed, "✗"), short, pciID, gpuNUMANode, col(ansiRed, "cross-NUMA"))
-		}
-	}
-}
-
-func shortenUUID(uuid string) string {
-	if len(uuid) > 16 {
-		return uuid[:8] + "..." + uuid[len(uuid)-4:]
-	}
-	return uuid
-}
-
-func getAllowedGPUs(pid int) ([]string, error) {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
-	if err != nil {
-		return nil, err
-	}
-	for _, env := range strings.Split(string(data), "\x00") {
-		if val, ok := strings.CutPrefix(env, "NVIDIA_VISIBLE_DEVICES="); ok {
-			val = strings.TrimSpace(val)
-			if val == "" || val == "none" || val == "void" {
-				return nil, nil
-			}
-			return strings.Split(val, ","), nil
-		}
-	}
-	return nil, nil
-}
+// GPU discovery.
 
 func getGPUInfo() (map[string]string, error) {
 	out, err := exec.Command("nvidia-smi", "--query-gpu=uuid,pci.bus_id", "--format=csv,noheader").Output()
