@@ -24,10 +24,11 @@ GOOS=linux GOARCH=amd64 go build -o /dev/null .
 ## Usage
 
 ```bash
-numa-check -pid <PID>
+numa-check -topo                                    # machine topology only (no PID)
+numa-check -pid <PID>                               # process NUMA analysis
 numa-check -pod <pod-name> -container <container-name>
-numa-check -pid <PID> -gpu        # GPU NUMA analysis
-numa-check -pid <PID> -numastat   # numastat memory stats
+numa-check -pid <PID> -gpu                          # GPU NUMA analysis
+numa-check -pid <PID> -numastat                     # numastat memory stats
 ```
 
 ## Architecture
@@ -50,9 +51,18 @@ The tool reads sysfs/procfs directly instead of shelling out to CLI tools:
 | Container PID | `crictl` (only with `-pod`/`-container` flags) |
 | NUMA memory stats | `numastat` (only with `-numastat` flag) |
 
+### Output modes
+
+- **`-topo`** — machine topology only: CPU grid per NUMA node + GPU NUMA placement (no PID needed)
+- **`-pid`/`-pod`** — full analysis: machine topology grid, then process CPU placement overlay on same grid, then optional GPU/numastat
+
+Output uses ANSI colors when stdout is a TTY, plain text otherwise.
+
 ### Key helpers
 
 - `readIntFile(path)` — reads a single-integer sysfs file
 - `expandCPUList(s)` — parses `0-3,8-11` format from sysfs cpulist files
 - `buildNUMAMap()` — builds cpu→NUMA node mapping from sysfs
+- `buildNUMANodes(numaMap)` — groups CPUs by NUMA node with socket IDs for display
 - `getCPUTopology(cpu)` — reads physical_package_id and core_id for a CPU
+- `printNodesGrid(...)` — renders NUMA node CPU grids side-by-side (16 CPUs per row)

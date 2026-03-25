@@ -15,6 +15,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Types for crictl JSON output.
+
 type CrictlPSOutput struct {
 	Containers []Container `json:"containers"`
 }
@@ -34,10 +36,42 @@ type CoreInfo struct {
 	CoreID     int
 }
 
+type NUMANodeInfo struct {
+	ID       int
+	SocketID int
+	CPUs     []int // sorted
+}
+
+// ANSI color codes.
+const (
+	ansiReset        = "\033[0m"
+	ansiBold         = "\033[1m"
+	ansiDim          = "\033[2m"
+	ansiRed          = "\033[31m"
+	ansiGreen        = "\033[32m"
+	ansiCyan         = "\033[36m"
+	ansiBrightYellow = "\033[93m"
+)
+
 var (
 	gpuCheck      bool
 	printNumastat bool
+	topoOnly      bool
+	useColor      bool
 )
+
+func init() {
+	if fi, err := os.Stdout.Stat(); err == nil {
+		useColor = fi.Mode()&os.ModeCharDevice != 0
+	}
+}
+
+func col(code, text string) string {
+	if !useColor {
+		return text
+	}
+	return code + text + ansiReset
+}
 
 func main() {
 	var pidFlag int
@@ -48,6 +82,7 @@ func main() {
 	flag.StringVar(&container, "container", "", "Container name (in the pod)")
 	flag.BoolVar(&gpuCheck, "gpu", false, "Perform GPU NUMA analysis")
 	flag.BoolVar(&printNumastat, "numastat", false, "Print numastat output")
+	flag.BoolVar(&topoOnly, "topo", false, "Show machine topology only (no process analysis)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: numa-check [flags]\n\n")
@@ -56,6 +91,11 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if topoOnly {
+		runTopoOnly()
+		return
+	}
 
 	var pid int
 	var err error
@@ -75,34 +115,69 @@ func main() {
 	runAnalysis(pid)
 }
 
-func runAnalysis(pid int) {
-	fmt.Printf("Analyzing PID: %d\n\n", pid)
+func runTopoOnly() {
+	numaMap, err := buildNUMAMap()
+	if err != nil {
+		log.Fatalf("Error reading NUMA topology: %v", err)
+	}
+	nodes := buildNUMANodes(numaMap)
 
-	// CPU affinity via sched_getaffinity syscall.
+	totalSockets := make(map[int]bool)
+	for _, n := range nodes {
+		if n.SocketID >= 0 {
+			totalSockets[n.SocketID] = true
+		}
+	}
+
+	fmt.Printf("\n%s\n\n", col(ansiBold, "numa-check — Machine Topology"))
+	printSection("CPU Topology")
+	fmt.Printf("  %d CPUs, %d NUMA nodes, %d sockets\n\n", len(numaMap), len(nodes), len(totalSockets))
+	printNodesGrid(nodes, "machine", nil, -1)
+
+	// Show GPU placement on the topology if nvidia-smi is available.
+	gpuMap, err := getGPUInfo()
+	if err == nil && len(gpuMap) > 0 {
+		// Build GPU-to-NUMA mapping.
+		type gpuInfo struct {
+			UUID     string
+			PCIID    string
+			NUMANode int
+		}
+		var gpus []gpuInfo
+		for uuid, pciID := range gpuMap {
+			node, err := readIntFile(filepath.Join("/sys/bus/pci/devices", pciID, "numa_node"))
+			if err != nil {
+				continue
+			}
+			gpus = append(gpus, gpuInfo{UUID: uuid, PCIID: pciID, NUMANode: node})
+		}
+		sort.Slice(gpus, func(i, j int) bool { return gpus[i].NUMANode < gpus[j].NUMANode })
+
+		fmt.Println()
+		printSection("GPU Topology")
+		fmt.Printf("  %d GPUs\n\n", len(gpus))
+		for _, g := range gpus {
+			fmt.Printf("  %s %s (PCI: %s) → NUMA Node %d\n",
+				col(ansiCyan, "■"), shortenUUID(g.UUID), g.PCIID, g.NUMANode)
+		}
+	}
+	fmt.Println()
+}
+
+func runAnalysis(pid int) {
+	// Collect data.
 	affinityList, err := getCPUAffinity(pid)
 	if err != nil {
 		log.Fatalf("Error getting CPU affinity: %v", err)
 	}
-	fmt.Printf("Allowed CPUs: %v\n", affinityList)
 
-	// Check if the process is pinned to a subset of system CPUs.
-	systemCPUs, err := getSystemCPUCount()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not determine system CPU count: %v\n", err)
-	} else if len(affinityList) < systemCPUs {
-		fmt.Printf("Process is pinned to %d of %d system CPUs.\n", len(affinityList), systemCPUs)
-	} else {
-		fmt.Printf("Process is NOT pinned (can use all %d system CPUs).\n", systemCPUs)
-	}
+	systemCPUs, systemCPUErr := getSystemCPUCount()
 
-	// Current CPU from /proc/<pid>/stat.
 	currentCPU, err := getCurrentCPU(pid)
 	if err != nil {
 		log.Fatalf("Error getting current CPU: %v", err)
 	}
-	fmt.Printf("Currently running on CPU: %d\n", currentCPU)
 
-	// NUMA topology from sysfs.
 	numaMap, err := buildNUMAMap()
 	if err != nil {
 		log.Fatalf("Error reading NUMA topology: %v", err)
@@ -112,22 +187,17 @@ func runAnalysis(pid int) {
 	if !ok {
 		log.Fatalf("CPU %d not found in NUMA topology", currentCPU)
 	}
-	fmt.Printf("Current CPU NUMA node: %d\n", cpuNUMANode)
 
-	// Optional numastat output.
-	if printNumastat {
-		numastatOut, err := exec.Command("numastat", "-p", fmt.Sprintf("%d", pid)).Output()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error running numastat: %v\n", execStderr(err))
-		} else {
-			fmt.Printf("\nNUMA Stats:\n%s\n", string(numastatOut))
-		}
+	nodes := buildNUMANodes(numaMap)
+
+	allowedSet := make(map[int]bool, len(affinityList))
+	for _, cpu := range affinityList {
+		allowedSet[cpu] = true
 	}
 
-	// Physical core, package, and NUMA distribution analysis.
 	uniqueCores := make(map[CoreInfo]bool)
 	uniquePackages := make(map[int]bool)
-	numaNodes := make(map[int]bool)
+	processNodes := make(map[int]bool)
 	for _, cpu := range affinityList {
 		info, err := getCPUTopology(cpu)
 		if err != nil {
@@ -137,26 +207,247 @@ func runAnalysis(pid int) {
 		uniqueCores[info] = true
 		uniquePackages[info.PhysicalID] = true
 		if node, ok := numaMap[cpu]; ok {
-			numaNodes[node] = true
+			processNodes[node] = true
 		}
 	}
-	fmt.Printf("Unique physical cores: %d, unique packages (sockets): %d\n",
-		len(uniqueCores), len(uniquePackages))
-	var nodes []int
-	for node := range numaNodes {
-		nodes = append(nodes, node)
-	}
-	sort.Ints(nodes)
-	fmt.Printf("Allowed CPUs span %d NUMA node(s): %v\n", len(nodes), nodes)
 
-	// GPU analysis (optional).
+	// Render output.
+	fmt.Printf("\n%s\n\n", col(ansiBold, fmt.Sprintf("numa-check — PID %d", pid)))
+
+	// Machine Topology section.
+	totalSockets := make(map[int]bool)
+	for _, n := range nodes {
+		if n.SocketID >= 0 {
+			totalSockets[n.SocketID] = true
+		}
+	}
+
+	printSection("Machine Topology")
+	fmt.Printf("  %d CPUs, %d NUMA nodes, %d sockets\n\n", len(numaMap), len(nodes), len(totalSockets))
+	printNodesGrid(nodes, "machine", nil, -1)
+
+	// Process section.
+	fmt.Println()
+	printSection(fmt.Sprintf("Process — PID %d", pid))
+
+	if systemCPUErr != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: could not determine system CPU count: %v\n", systemCPUErr)
+	} else {
+		pinLabel := col(ansiGreen, "pinned")
+		if len(affinityList) >= systemCPUs {
+			pinLabel = col(ansiBrightYellow, "not pinned")
+		}
+		fmt.Printf("  Allowed CPUs ......... %d / %d (%s)\n", len(affinityList), systemCPUs, pinLabel)
+	}
+	fmt.Printf("  Currently on ......... CPU %d → NUMA Node %d\n", currentCPU, cpuNUMANode)
+	fmt.Printf("  Physical cores ....... %d cores, %d sockets\n", len(uniqueCores), len(uniquePackages))
+
+	sortedNodes := sortedKeys(processNodes)
+	fmt.Printf("  NUMA span ............ %d node%s %v\n\n", len(sortedNodes), plural(len(sortedNodes)), sortedNodes)
+
+	fmt.Printf("  %s = allowed  %s = current  %s = not allowed\n\n",
+		col(ansiGreen, "■"), col(ansiBrightYellow, "★"), col(ansiDim, "·"))
+	printNodesGrid(nodes, "process", allowedSet, currentCPU)
+
+	// Optional numastat.
+	if printNumastat {
+		fmt.Println()
+		numastatOut, err := exec.Command("numastat", "-p", fmt.Sprintf("%d", pid)).Output()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error running numastat: %v\n", execStderr(err))
+		} else {
+			printSection("NUMA Memory Stats")
+			fmt.Printf("%s\n", string(numastatOut))
+		}
+	}
+
+	// GPU analysis.
 	if gpuCheck {
-		fmt.Println("\nGPU NUMA Analysis:")
-		runGPUAnalysis(pid, numaNodes)
+		fmt.Println()
+		printSection("GPU Locality")
+		printGPUAnalysis(pid, processNodes)
+	}
+
+	fmt.Println()
+}
+
+// Display helpers.
+
+func printSection(title string) {
+	fmt.Printf("  %s\n", col(ansiBold, title))
+	fmt.Printf("  %s\n", col(ansiDim, strings.Repeat("─", len(title))))
+}
+
+const gridCols = 16
+
+func printNodesGrid(nodes []NUMANodeInfo, mode string, allowedSet map[int]bool, currentCPU int) {
+	for i := 0; i < len(nodes); i += 2 {
+		left := &nodes[i]
+		var right *NUMANodeInfo
+		if i+1 < len(nodes) {
+			right = &nodes[i+1]
+		}
+		printNodePair(left, right, mode, allowedSet, currentCPU)
+		if i+2 < len(nodes) {
+			fmt.Println()
+		}
 	}
 }
 
-// getCPUAffinity returns the sorted list of CPUs the process is allowed to run on.
+func printNodePair(left, right *NUMANodeInfo, mode string, allowedSet map[int]bool, currentCPU int) {
+	const colWidth = 24
+	const gap = "          "
+
+	// Headers.
+	lh := nodeHeader(left)
+	if right != nil {
+		fmt.Printf("  %s%s%s\n", col(ansiBold, pad(lh, colWidth)), gap, col(ansiBold, nodeHeader(right)))
+	} else {
+		fmt.Printf("  %s\n", col(ansiBold, lh))
+	}
+
+	// Grid rows.
+	leftRows := renderGrid(left.CPUs, mode, allowedSet, currentCPU)
+	var rightRows []string
+	if right != nil {
+		rightRows = renderGrid(right.CPUs, mode, allowedSet, currentCPU)
+	}
+
+	maxRows := len(leftRows)
+	if len(rightRows) > maxRows {
+		maxRows = len(rightRows)
+	}
+
+	for r := 0; r < maxRows; r++ {
+		lRow := ""
+		lWidth := 0
+		if r < len(leftRows) {
+			lRow = leftRows[r]
+			lWidth = gridRowWidth(left.CPUs, r)
+		}
+		if right != nil {
+			rRow := ""
+			if r < len(rightRows) {
+				rRow = rightRows[r]
+			}
+			fmt.Printf("  %s%s%s%s\n", lRow, strings.Repeat(" ", colWidth-lWidth), gap, rRow)
+		} else {
+			fmt.Printf("  %s\n", lRow)
+		}
+	}
+
+	// Footers.
+	lf := nodeFooter(left, mode, allowedSet)
+	if right != nil {
+		rf := nodeFooter(right, mode, allowedSet)
+		fmt.Printf("  %s%s%s\n", col(ansiDim, pad(lf, colWidth)), gap, col(ansiDim, rf))
+	} else {
+		fmt.Printf("  %s\n", col(ansiDim, lf))
+	}
+}
+
+func nodeHeader(n *NUMANodeInfo) string {
+	h := fmt.Sprintf("NUMA Node %d", n.ID)
+	if n.SocketID >= 0 {
+		h += fmt.Sprintf(" — Socket %d", n.SocketID)
+	}
+	return h
+}
+
+func nodeFooter(n *NUMANodeInfo, mode string, allowedSet map[int]bool) string {
+	if mode == "process" {
+		count := 0
+		for _, cpu := range n.CPUs {
+			if allowedSet[cpu] {
+				count++
+			}
+		}
+		return fmt.Sprintf("%d allowed", count)
+	}
+	return fmt.Sprintf("%d CPUs (%d–%d)", len(n.CPUs), n.CPUs[0], n.CPUs[len(n.CPUs)-1])
+}
+
+func renderGrid(cpus []int, mode string, allowedSet map[int]bool, currentCPU int) []string {
+	var rows []string
+	for i := 0; i < len(cpus); i += gridCols {
+		end := i + gridCols
+		if end > len(cpus) {
+			end = len(cpus)
+		}
+		var sb strings.Builder
+		for _, cpu := range cpus[i:end] {
+			switch mode {
+			case "machine":
+				sb.WriteString(col(ansiCyan, "█"))
+			case "process":
+				if cpu == currentCPU {
+					sb.WriteString(col(ansiBrightYellow, "★"))
+				} else if allowedSet[cpu] {
+					sb.WriteString(col(ansiGreen, "■"))
+				} else {
+					sb.WriteString(col(ansiDim, "·"))
+				}
+			}
+		}
+		rows = append(rows, sb.String())
+	}
+	return rows
+}
+
+func gridRowWidth(cpus []int, row int) int {
+	start := row * gridCols
+	remaining := len(cpus) - start
+	if remaining > gridCols {
+		return gridCols
+	}
+	return remaining
+}
+
+func pad(s string, width int) string {
+	if len(s) >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-len(s))
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+func sortedKeys(m map[int]bool) []int {
+	var keys []int
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	return keys
+}
+
+func buildNUMANodes(numaMap map[int]int) []NUMANodeInfo {
+	nodeCPUs := make(map[int][]int)
+	for cpu, node := range numaMap {
+		nodeCPUs[node] = append(nodeCPUs[node], cpu)
+	}
+	var nodes []NUMANodeInfo
+	for id, cpus := range nodeCPUs {
+		sort.Ints(cpus)
+		socketID := -1
+		if len(cpus) > 0 {
+			if info, err := getCPUTopology(cpus[0]); err == nil {
+				socketID = info.PhysicalID
+			}
+		}
+		nodes = append(nodes, NUMANodeInfo{ID: id, SocketID: socketID, CPUs: cpus})
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	return nodes
+}
+
+// Data collection functions.
+
 func getCPUAffinity(pid int) ([]int, error) {
 	var set unix.CPUSet
 	if err := unix.SchedGetaffinity(pid, &set); err != nil {
@@ -171,7 +462,6 @@ func getCPUAffinity(pid int) ([]int, error) {
 	return cpus, nil
 }
 
-// getCurrentCPU reads /proc/<pid>/stat to determine which CPU the process is currently on.
 func getCurrentCPU(pid int) (int, error) {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
@@ -192,7 +482,6 @@ func getCurrentCPU(pid int) (int, error) {
 	return strconv.Atoi(fields[36])
 }
 
-// getSystemCPUCount returns the total number of CPUs on the system.
 func getSystemCPUCount() (int, error) {
 	data, err := os.ReadFile("/sys/devices/system/cpu/possible")
 	if err != nil {
@@ -205,7 +494,6 @@ func getSystemCPUCount() (int, error) {
 	return len(cpus), nil
 }
 
-// buildNUMAMap reads sysfs to build a mapping from CPU ID to NUMA node ID.
 func buildNUMAMap() (map[int]int, error) {
 	matches, err := filepath.Glob("/sys/devices/system/node/node[0-9]*")
 	if err != nil {
@@ -243,7 +531,6 @@ func buildNUMAMap() (map[int]int, error) {
 	return cpuToNode, nil
 }
 
-// getCPUTopology reads sysfs topology files for a given CPU.
 func getCPUTopology(cpu int) (CoreInfo, error) {
 	base := fmt.Sprintf("/sys/devices/system/cpu/cpu%d/topology", cpu)
 	physID, err := readIntFile(filepath.Join(base, "physical_package_id"))
@@ -257,7 +544,6 @@ func getCPUTopology(cpu int) (CoreInfo, error) {
 	return CoreInfo{PhysicalID: physID, CoreID: coreID}, nil
 }
 
-// readIntFile reads a sysfs file containing a single integer.
 func readIntFile(path string) (int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -266,7 +552,6 @@ func readIntFile(path string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(data)))
 }
 
-// execStderr extracts stderr from an exec.ExitError, or returns the error as-is.
 func execStderr(err error) error {
 	if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
@@ -274,7 +559,6 @@ func execStderr(err error) error {
 	return err
 }
 
-// expandCPUList parses a CPU list string like "0-3,8-11" into individual CPU IDs.
 func expandCPUList(s string) ([]int, error) {
 	if s == "" {
 		return nil, fmt.Errorf("empty CPU list")
@@ -309,23 +593,23 @@ func expandCPUList(s string) ([]int, error) {
 	return cpus, nil
 }
 
-// GPU analysis functions.
+// GPU analysis.
 
-func runGPUAnalysis(pid int, allowedNUMANodes map[int]bool) {
+func printGPUAnalysis(pid int, allowedNUMANodes map[int]bool) {
 	allowedGPUs, err := getAllowedGPUs(pid)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading process environment: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  Error reading process environment: %v\n", err)
 		return
 	}
 	if len(allowedGPUs) == 0 {
-		fmt.Println("NVIDIA_VISIBLE_DEVICES not set; process can access all GPUs.")
+		fmt.Println("  NVIDIA_VISIBLE_DEVICES not set; checking all GPUs.")
 	} else {
-		fmt.Printf("Process allowed GPUs (by UUID): %v\n", allowedGPUs)
+		fmt.Printf("  Allowed GPUs: %d\n", len(allowedGPUs))
 	}
 
 	gpuMap, err := getGPUInfo()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error retrieving GPU info via nvidia-smi: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  Error retrieving GPU info: %v\n", err)
 		return
 	}
 
@@ -338,20 +622,30 @@ func runGPUAnalysis(pid int, allowedNUMANodes map[int]bool) {
 	for _, gpuUUID := range allowedGPUs {
 		pciID, found := gpuMap[gpuUUID]
 		if !found {
-			fmt.Fprintf(os.Stderr, "Warning: GPU %s not found in nvidia-smi output\n", gpuUUID)
+			fmt.Fprintf(os.Stderr, "  Warning: GPU %s not found in nvidia-smi output\n", gpuUUID)
 			continue
 		}
 		gpuNUMANode, err := readIntFile(filepath.Join("/sys/bus/pci/devices", pciID, "numa_node"))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading NUMA node for GPU %s (PCI: %s): %v\n", gpuUUID, pciID, err)
+			fmt.Fprintf(os.Stderr, "  Error reading NUMA node for GPU %s (PCI: %s): %v\n", gpuUUID, pciID, err)
 			continue
 		}
+		short := shortenUUID(gpuUUID)
 		if allowedNUMANodes[gpuNUMANode] {
-			fmt.Printf("GPU %s (PCI: %s): NUMA node %d (within allowed CPU NUMA nodes)\n", gpuUUID, pciID, gpuNUMANode)
+			fmt.Printf("  %s %s (PCI: %s) → NUMA Node %d %s\n",
+				col(ansiGreen, "✓"), short, pciID, gpuNUMANode, col(ansiGreen, "same NUMA"))
 		} else {
-			fmt.Printf("GPU %s (PCI: %s): NUMA node %d (OUTSIDE allowed CPU NUMA nodes)\n", gpuUUID, pciID, gpuNUMANode)
+			fmt.Printf("  %s %s (PCI: %s) → NUMA Node %d %s\n",
+				col(ansiRed, "✗"), short, pciID, gpuNUMANode, col(ansiRed, "cross-NUMA"))
 		}
 	}
+}
+
+func shortenUUID(uuid string) string {
+	if len(uuid) > 16 {
+		return uuid[:8] + "..." + uuid[len(uuid)-4:]
+	}
+	return uuid
 }
 
 func getAllowedGPUs(pid int) ([]string, error) {
@@ -397,8 +691,8 @@ func normalizePCI(pciID string) string {
 	return normalized
 }
 
-// getPIDFromContainer uses crictl to find a container by pod and container name,
-// then returns its host PID.
+// Container PID lookup via crictl.
+
 func getPIDFromContainer(podName, containerName string) (int, error) {
 	out, err := exec.Command("crictl", "ps", "-o", "json").Output()
 	if err != nil {

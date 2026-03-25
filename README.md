@@ -14,28 +14,74 @@ On multi-socket servers, memory access is non-uniform — a CPU accessing memory
 
 ## Example
 
-```
-$ numa-check -pid 4521 -gpu
-
-Analyzing PID: 4521
-
-Allowed CPUs: [32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47]
-Process is pinned to 16 of 128 system CPUs.
-Currently running on CPU: 35
-Current CPU NUMA node: 1
-Unique physical cores: 8, unique packages (sockets): 1
-Allowed CPUs span 1 NUMA node(s): [1]
-
-GPU NUMA Analysis:
-Process allowed GPUs (by UUID): [GPU-a1b2c3d4-5678-90ab-cdef-111111111111]
-GPU GPU-a1b2c3d4-5678-90ab-cdef-111111111111 (PCI: 0000:3b:00.0): NUMA node 1 (within allowed CPU NUMA nodes)
-```
-
-A badly placed container might look like:
+Process analysis on a 2-socket, 256-CPU machine where a container uses 16 CPUs on NUMA Node 1:
 
 ```
-Allowed CPUs span 2 NUMA node(s): [0 1]
-GPU ...: NUMA node 0 (OUTSIDE allowed CPU NUMA nodes)
+numa-check — PID 4521
+
+  Machine Topology
+  ────────────────
+  256 CPUs, 2 NUMA nodes, 2 sockets
+
+  NUMA Node 0 — Socket 0         NUMA Node 1 — Socket 1
+  ████████████████                ████████████████
+  ████████████████                ████████████████
+  ████████████████                ████████████████
+  ████████████████                ████████████████
+  ████████████████                ████████████████
+  ████████████████                ████████████████
+  ████████████████                ████████████████
+  ████████████████                ████████████████
+  128 CPUs (0–127)                128 CPUs (128–255)
+
+  Process — PID 4521
+  ──────────────────
+  Allowed CPUs ......... 16 / 256 (pinned)
+  Currently on ......... CPU 163 → NUMA Node 1
+  Physical cores ....... 8 cores, 1 socket
+  NUMA span ............ 1 node [1]
+
+  ■ = allowed  ★ = current  · = not allowed
+
+  NUMA Node 0                     NUMA Node 1
+  ················                ················
+  ················                ················
+  ················                ■■■★■■■■■■■■■■■■
+  ················                ················
+  ················                ················
+  ················                ················
+  ················                ················
+  ················                ················
+  0 allowed                       16 allowed
+
+  GPU Locality
+  ────────────
+  ✓ GPU-a1b2...c3d4 (0000:3b:00.0) → NUMA Node 1 same NUMA
+```
+
+Machine topology mode (no PID needed):
+
+```
+$ numa-check -topo
+
+numa-check — Machine Topology
+
+  CPU Topology
+  ────────────
+  256 CPUs, 2 NUMA nodes, 2 sockets
+
+  NUMA Node 0 — Socket 0         NUMA Node 1 — Socket 1
+  ████████████████                ████████████████
+  ...                             ...
+
+  GPU Topology
+  ────────────
+  4 GPUs
+
+  ■ GPU-a1b2...c3d4 (0000:3b:00.0) → NUMA Node 0
+  ■ GPU-e5f6...7890 (0000:3c:00.0) → NUMA Node 0
+  ■ GPU-1234...5678 (0000:86:00.0) → NUMA Node 1
+  ■ GPU-abcd...ef01 (0000:87:00.0) → NUMA Node 1
 ```
 
 ## Install
@@ -49,7 +95,10 @@ Or use `make build`.
 ## Usage
 
 ```
-# By PID
+# Machine topology (no PID required)
+numa-check -topo
+
+# Process analysis by PID
 numa-check -pid <PID>
 
 # By Kubernetes pod/container (requires crictl)
