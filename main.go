@@ -99,6 +99,10 @@ func main() {
 	}
 	flag.Parse()
 
+	if flag.NArg() > 0 {
+		log.Fatalf("unexpected arguments: %s", strings.Join(flag.Args(), " "))
+	}
+
 	if topoOnly {
 		runTopoOnly()
 		return
@@ -109,12 +113,21 @@ func main() {
 
 	if pidFlag != 0 {
 		pid = pidFlag
-	} else if pod != "" && container != "" {
+	} else if pod != "" || container != "" {
+		if pod == "" {
+			log.Fatalf("-pod flag is required when -container is set")
+		}
+		if container == "" {
+			log.Fatalf("-container flag is required when -pod is set")
+		}
 		pid, err = getPIDFromContainer(pod, container)
 		if err != nil {
 			log.Fatalf("Error obtaining PID from container: %v", err)
 		}
 	} else {
+		if printNumastat {
+			log.Fatalf("-numastat requires -pid or -pod/-container")
+		}
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -201,10 +214,12 @@ func runAnalysis(pid int) {
 
 	// Determine which GPUs the process can use.
 	var allowedGPUs map[string]bool
+	var gpuEnvErr bool
 	if len(gpus) > 0 {
 		procGPUs, err := getAllowedGPUs(pid)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not read process GPU environment: %v\n", err)
+			gpuEnvErr = true
 		} else if procGPUs != nil {
 			allowedGPUs = make(map[string]bool, len(procGPUs))
 			for _, uuid := range procGPUs {
@@ -256,7 +271,7 @@ func runAnalysis(pid int) {
 	}
 	fmt.Printf("  Currently on ......... CPU %d → NUMA Node %d\n", currentCPU, cpuNUMANode)
 
-	if len(gpus) > 0 {
+	if len(gpus) > 0 && !gpuEnvErr {
 		if allowedGPUs == nil {
 			fmt.Printf("  Allowed GPUs ......... all %d GPUs\n", len(gpus))
 		} else {
@@ -267,7 +282,14 @@ func runAnalysis(pid int) {
 
 	fmt.Printf("  %s = allowed  %s = current  %s = not allowed\n\n",
 		col(ansiGreen, "■"), col(ansiBrightYellow, "★"), col(ansiDim, "□"))
-	printNodesGrid(nodes, "process", allowedSet, currentCPU, processNodes, allowedGPUs)
+	processGridNodes := nodes
+	if gpuEnvErr {
+		processGridNodes = make([]NUMANodeInfo, len(nodes))
+		for i, n := range nodes {
+			processGridNodes[i] = NUMANodeInfo{ID: n.ID, SocketID: n.SocketID, CPUs: n.CPUs}
+		}
+	}
+	printNodesGrid(processGridNodes, "process", allowedSet, currentCPU, processNodes, allowedGPUs)
 
 	// Optional numastat.
 	if printNumastat {
@@ -826,7 +848,7 @@ func getPIDFromContainer(podName, containerName string) (int, error) {
 		return 0, fmt.Errorf("container %q in pod %q not found", containerName, podName)
 	}
 
-	inspectOut, err := exec.Command("crictl", "inspect", targetContainerID, "-o", "json").Output()
+	inspectOut, err := exec.Command("crictl", "inspect", "-o", "json", targetContainerID).Output()
 	if err != nil {
 		return 0, fmt.Errorf("crictl inspect failed: %v", execStderr(err))
 	}
