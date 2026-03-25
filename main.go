@@ -38,6 +38,7 @@ type CoreInfo struct {
 }
 
 type GPUDevice struct {
+	Index    int // global GPU index (0-based, stable across nodes)
 	UUID     string
 	PCIID    string
 	NUMANode int
@@ -427,7 +428,7 @@ func renderGPURows(gpus []GPUDevice, mode string, nodeID int, processNodes map[i
 			if gpu.NUMANode < 0 {
 				suffix = " ?"
 			}
-			block := fmt.Sprintf("▀▀ GPU %d%s", i+j, suffix)
+			block := fmt.Sprintf("▀▀ GPU %d%s", gpu.Index, suffix)
 			switch mode {
 			case "machine":
 				sb.WriteString(col(ansiGreen, block))
@@ -574,6 +575,9 @@ func discoverGPUs() []GPUDevice {
 		}
 		return gpus[i].PCIID < gpus[j].PCIID
 	})
+	for i := range gpus {
+		gpus[i].Index = i
+	}
 	return gpus
 }
 
