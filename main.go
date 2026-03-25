@@ -63,7 +63,6 @@ const (
 )
 
 var (
-	gpuCheck      bool
 	printNumastat bool
 	topoOnly      bool
 	useColor      bool
@@ -89,7 +88,6 @@ func main() {
 	flag.IntVar(&pidFlag, "pid", 0, "Process ID to analyze")
 	flag.StringVar(&pod, "pod", "", "Pod name (for container lookup via crictl)")
 	flag.StringVar(&container, "container", "", "Container name (in the pod)")
-	flag.BoolVar(&gpuCheck, "gpu", false, "Perform GPU NUMA analysis")
 	flag.BoolVar(&printNumastat, "numastat", false, "Print numastat output")
 	flag.BoolVar(&topoOnly, "topo", false, "Show machine topology only (no process analysis)")
 
@@ -157,7 +155,7 @@ func runTopoOnly() {
 	}
 	fmt.Printf("%s\n\n", summary)
 
-	printNodesGrid(nodes, "machine", nil, -1, nil)
+	printNodesGrid(nodes, "machine", nil, -1, nil, nil)
 	fmt.Println()
 }
 
@@ -185,10 +183,8 @@ func runAnalysis(pid int) {
 		log.Fatalf("CPU %d not found in NUMA topology", currentCPU)
 	}
 
-	var gpus []GPUDevice
-	if gpuCheck {
-		gpus = discoverGPUs()
-	}
+	// Always discover GPUs (nvidia-smi is fast; silently returns nil if unavailable).
+	gpus := discoverGPUs()
 	nodes := buildNUMANodes(numaMap, gpus)
 
 	allowedSet := make(map[int]bool, len(affinityList))
@@ -203,6 +199,21 @@ func runAnalysis(pid int) {
 		}
 	}
 
+	// Determine which GPUs the process can use.
+	var allowedGPUs map[string]bool
+	if len(gpus) > 0 {
+		procGPUs, err := getAllowedGPUs(pid)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not read process GPU environment: %v\n", err)
+		} else if procGPUs != nil {
+			allowedGPUs = make(map[string]bool, len(procGPUs))
+			for _, uuid := range procGPUs {
+				allowedGPUs[uuid] = true
+			}
+		}
+		// allowedGPUs == nil means all GPUs are visible (NVIDIA_VISIBLE_DEVICES not set).
+	}
+
 	// Render output.
 	fmt.Printf("\n%s\n\n", col(ansiBold, fmt.Sprintf("numa-check — PID %d", pid)))
 
@@ -214,7 +225,6 @@ func runAnalysis(pid int) {
 		}
 	}
 
-	// Count total physical cores across the machine.
 	allCores := make(map[CoreInfo]bool)
 	for cpu := range numaMap {
 		if info, err := getCPUTopology(cpu); err == nil {
@@ -229,7 +239,7 @@ func runAnalysis(pid int) {
 		summary += fmt.Sprintf(", %d GPUs", len(gpus))
 	}
 	fmt.Printf("%s\n\n", summary)
-	printNodesGrid(nodes, "machine", nil, -1, nil)
+	printNodesGrid(nodes, "machine", nil, -1, nil, nil)
 
 	// Process section.
 	fmt.Println()
@@ -244,11 +254,20 @@ func runAnalysis(pid int) {
 		}
 		fmt.Printf("  Allowed CPUs ......... %d / %d (%s)\n", len(affinityList), systemCPUs, pinLabel)
 	}
-	fmt.Printf("  Currently on ......... CPU %d → NUMA Node %d\n\n", currentCPU, cpuNUMANode)
+	fmt.Printf("  Currently on ......... CPU %d → NUMA Node %d\n", currentCPU, cpuNUMANode)
+
+	if len(gpus) > 0 {
+		if allowedGPUs == nil {
+			fmt.Printf("  Allowed GPUs ......... all %d GPUs\n", len(gpus))
+		} else {
+			fmt.Printf("  Allowed GPUs ......... %d / %d\n", len(allowedGPUs), len(gpus))
+		}
+	}
+	fmt.Println()
 
 	fmt.Printf("  %s = allowed  %s = current  %s = not allowed\n\n",
 		col(ansiGreen, "■"), col(ansiBrightYellow, "★"), col(ansiDim, "□"))
-	printNodesGrid(nodes, "process", allowedSet, currentCPU, processNodes)
+	printNodesGrid(nodes, "process", allowedSet, currentCPU, processNodes, allowedGPUs)
 
 	// Optional numastat.
 	if printNumastat {
@@ -274,22 +293,21 @@ func printSection(title string) {
 
 const gridCols = 16 // CPUs per row in the topology grid
 
-// processNodes is only used in "process" mode to color GPUs by NUMA locality.
-func printNodesGrid(nodes []NUMANodeInfo, mode string, allowedSet map[int]bool, currentCPU int, processNodes map[int]bool) {
+func printNodesGrid(nodes []NUMANodeInfo, mode string, allowedSet map[int]bool, currentCPU int, processNodes map[int]bool, allowedGPUs map[string]bool) {
 	for i := 0; i < len(nodes); i += 2 {
 		left := &nodes[i]
 		var right *NUMANodeInfo
 		if i+1 < len(nodes) {
 			right = &nodes[i+1]
 		}
-		printNodePair(left, right, mode, allowedSet, currentCPU, processNodes)
+		printNodePair(left, right, mode, allowedSet, currentCPU, processNodes, allowedGPUs)
 		if i+2 < len(nodes) {
 			fmt.Println()
 		}
 	}
 }
 
-func printNodePair(left, right *NUMANodeInfo, mode string, allowedSet map[int]bool, currentCPU int, processNodes map[int]bool) {
+func printNodePair(left, right *NUMANodeInfo, mode string, allowedSet map[int]bool, currentCPU int, processNodes map[int]bool, allowedGPUs map[string]bool) {
 	const colWidth = 34 // visual width reserved for left column (16 CPUs * 2 - 1 = 31, plus padding)
 	const gap = "    "   // gap between side-by-side nodes
 
@@ -343,10 +361,10 @@ func printNodePair(left, right *NUMANodeInfo, mode string, allowedSet map[int]bo
 	// GPU rows below, with their own footer.
 	if len(left.GPUs) > 0 || (right != nil && len(right.GPUs) > 0) {
 		fmt.Println()
-		leftGPURows, leftGPUWidths := renderGPURows(left.GPUs, mode, left.ID, processNodes)
+		leftGPURows, leftGPUWidths := renderGPURows(left.GPUs, mode, left.ID, processNodes, allowedGPUs)
 		var rightGPURows []string
 		if right != nil {
-			rightGPURows, _ = renderGPURows(right.GPUs, mode, right.ID, processNodes)
+			rightGPURows, _ = renderGPURows(right.GPUs, mode, right.ID, processNodes, allowedGPUs)
 		}
 
 		maxGPURows := len(leftGPURows)
@@ -412,8 +430,8 @@ func gpuFooter(n *NUMANodeInfo) string {
 }
 
 // renderGPURows renders GPU labels in rows of 2, fitting under the CPU grid.
-// Returns the rendered strings and their visual widths.
-func renderGPURows(gpus []GPUDevice, mode string, nodeID int, processNodes map[int]bool) ([]string, []int) {
+// In process mode: green = process can use + same NUMA, red = process can use + cross-NUMA, dim = process cannot use.
+func renderGPURows(gpus []GPUDevice, mode string, nodeID int, processNodes map[int]bool, allowedGPUs map[string]bool) ([]string, []int) {
 	if len(gpus) == 0 {
 		return nil, nil
 	}
@@ -437,10 +455,15 @@ func renderGPURows(gpus []GPUDevice, mode string, nodeID int, processNodes map[i
 			case "machine":
 				sb.WriteString(col(ansiGreen, block))
 			case "process":
-				if processNodes[nodeID] {
-					sb.WriteString(col(ansiGreen, block))
+				if allowedGPUs == nil || allowedGPUs[gpu.UUID] {
+					// Process can use this GPU (or all GPUs visible).
+					if processNodes[nodeID] {
+						sb.WriteString(col(ansiGreen, block))
+					} else {
+						sb.WriteString(col(ansiRed, block))
+					}
 				} else {
-					sb.WriteString(col(ansiRed, block))
+					sb.WriteString(col(ansiDim, block))
 				}
 			}
 			width += utf8.RuneCountInString(block)
@@ -732,7 +755,24 @@ func expandCPUList(s string) ([]int, error) {
 	return cpus, nil
 }
 
-// GPU discovery.
+// GPU discovery and process GPU access.
+
+func getAllowedGPUs(pid int) ([]string, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+	if err != nil {
+		return nil, err
+	}
+	for _, env := range strings.Split(string(data), "\x00") {
+		if val, ok := strings.CutPrefix(env, "NVIDIA_VISIBLE_DEVICES="); ok {
+			val = strings.TrimSpace(val)
+			if val == "" || val == "none" || val == "void" {
+				return nil, nil
+			}
+			return strings.Split(val, ","), nil
+		}
+	}
+	return nil, nil
+}
 
 func getGPUInfo() (map[string]string, error) {
 	out, err := exec.Command("nvidia-smi", "--query-gpu=uuid,pci.bus_id", "--format=csv,noheader").Output()
