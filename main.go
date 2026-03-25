@@ -232,32 +232,7 @@ func runAnalysis(pid int) {
 	// Render output.
 	fmt.Printf("\n%s\n\n", col(ansiBold, fmt.Sprintf("numa-check — PID %d", pid)))
 
-	// Machine Topology section.
-	totalSockets := make(map[int]bool)
-	for _, n := range nodes {
-		if n.SocketID >= 0 {
-			totalSockets[n.SocketID] = true
-		}
-	}
-
-	allCores := make(map[CoreInfo]bool)
-	for cpu := range numaMap {
-		if info, err := getCPUTopology(cpu); err == nil {
-			allCores[info] = true
-		}
-	}
-
-	printSection("Machine Topology")
-	summary := fmt.Sprintf("  %d CPUs (%d physical cores), %d NUMA nodes, %d sockets",
-		len(numaMap), len(allCores), len(nodes), len(totalSockets))
-	if len(gpus) > 0 {
-		summary += fmt.Sprintf(", %d GPUs", len(gpus))
-	}
-	fmt.Printf("%s\n\n", summary)
-	printNodesGrid(nodes, "machine", nil, -1, nil, nil)
-
 	// Process section.
-	fmt.Println()
 	printSection(fmt.Sprintf("Process — PID %d", pid))
 
 	if systemCPUErr != nil {
@@ -780,20 +755,46 @@ func expandCPUList(s string) ([]int, error) {
 // GPU discovery and process GPU access.
 
 func getAllowedGPUs(pid int) ([]string, error) {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
-	if err != nil {
-		return nil, err
-	}
-	for _, env := range strings.Split(string(data), "\x00") {
-		if val, ok := strings.CutPrefix(env, "NVIDIA_VISIBLE_DEVICES="); ok {
-			val = strings.TrimSpace(val)
-			if val == "" || val == "none" || val == "void" {
-				return nil, nil
+	// Walk up the process tree to find NVIDIA_VISIBLE_DEVICES.
+	// The container runtime injects it on the init process (e.g. tini),
+	// but child processes (bash, java) may not have it in their exec-time environ.
+	for p := pid; p > 1; {
+		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", p))
+		if err != nil {
+			if p == pid {
+				return nil, err
 			}
-			return strings.Split(val, ","), nil
+			// Can't read parent's environ (likely outside container), stop.
+			return nil, nil
+		}
+		for _, env := range strings.Split(string(data), "\x00") {
+			if val, ok := strings.CutPrefix(env, "NVIDIA_VISIBLE_DEVICES="); ok {
+				val = strings.TrimSpace(val)
+				if val == "" || val == "none" || val == "void" {
+					return nil, nil
+				}
+				return strings.Split(val, ","), nil
+			}
+		}
+		p, err = getParentPID(p)
+		if err != nil {
+			return nil, nil
 		}
 	}
 	return nil, nil
+}
+
+func getParentPID(pid int) (int, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "PPid:") {
+			return strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "PPid:")))
+		}
+	}
+	return 0, fmt.Errorf("PPid not found in /proc/%d/status", pid)
 }
 
 func getGPUInfo() (map[string]string, error) {
