@@ -140,10 +140,18 @@ func runTopoOnly() {
 		}
 	}
 
+	allCores := make(map[CoreInfo]bool)
+	for cpu := range numaMap {
+		if info, err := getCPUTopology(cpu); err == nil {
+			allCores[info] = true
+		}
+	}
+
 	fmt.Printf("\n%s\n\n", col(ansiBold, "numa-check — Machine Topology"))
 	printSection("Topology")
 
-	summary := fmt.Sprintf("  %d CPUs, %d NUMA nodes, %d sockets", len(numaMap), len(nodes), len(totalSockets))
+	summary := fmt.Sprintf("  %d CPUs (%d physical cores), %d NUMA nodes, %d sockets",
+		len(numaMap), len(allCores), len(nodes), len(totalSockets))
 	if len(gpus) > 0 {
 		summary += fmt.Sprintf(", %d GPUs", len(gpus))
 	}
@@ -188,17 +196,8 @@ func runAnalysis(pid int) {
 		allowedSet[cpu] = true
 	}
 
-	uniqueCores := make(map[CoreInfo]bool)
-	uniquePackages := make(map[int]bool)
 	processNodes := make(map[int]bool)
 	for _, cpu := range affinityList {
-		info, err := getCPUTopology(cpu)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: cannot read topology for CPU %d: %v\n", cpu, err)
-			continue
-		}
-		uniqueCores[info] = true
-		uniquePackages[info.PhysicalID] = true
 		if node, ok := numaMap[cpu]; ok {
 			processNodes[node] = true
 		}
@@ -215,8 +214,17 @@ func runAnalysis(pid int) {
 		}
 	}
 
+	// Count total physical cores across the machine.
+	allCores := make(map[CoreInfo]bool)
+	for cpu := range numaMap {
+		if info, err := getCPUTopology(cpu); err == nil {
+			allCores[info] = true
+		}
+	}
+
 	printSection("Machine Topology")
-	summary := fmt.Sprintf("  %d CPUs, %d NUMA nodes, %d sockets", len(numaMap), len(nodes), len(totalSockets))
+	summary := fmt.Sprintf("  %d CPUs (%d physical cores), %d NUMA nodes, %d sockets",
+		len(numaMap), len(allCores), len(nodes), len(totalSockets))
 	if len(gpus) > 0 {
 		summary += fmt.Sprintf(", %d GPUs", len(gpus))
 	}
@@ -236,11 +244,7 @@ func runAnalysis(pid int) {
 		}
 		fmt.Printf("  Allowed CPUs ......... %d / %d (%s)\n", len(affinityList), systemCPUs, pinLabel)
 	}
-	fmt.Printf("  Currently on ......... CPU %d → NUMA Node %d\n", currentCPU, cpuNUMANode)
-	fmt.Printf("  Physical cores ....... %d cores, %d sockets\n", len(uniqueCores), len(uniquePackages))
-
-	sortedNodes := sortedKeys(processNodes)
-	fmt.Printf("  NUMA span ............ %d node%s %v\n\n", len(sortedNodes), plural(len(sortedNodes)), sortedNodes)
+	fmt.Printf("  Currently on ......... CPU %d → NUMA Node %d\n\n", currentCPU, cpuNUMANode)
 
 	fmt.Printf("  %s = allowed  %s = current  %s = not allowed\n\n",
 		col(ansiGreen, "■"), col(ansiBrightYellow, "★"), col(ansiDim, "□"))
