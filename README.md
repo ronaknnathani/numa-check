@@ -19,44 +19,18 @@ Process analysis on a 2-socket, 256-CPU machine where a container uses 16 CPUs o
 ```
 numa-check — PID 4521
 
-  Machine Topology
-  ────────────────
-  256 CPUs, 2 NUMA nodes, 2 sockets
-
-  NUMA Node 0 — Socket 0         NUMA Node 1 — Socket 1
-  ████████████████                ████████████████
-  ████████████████                ████████████████
-  ████████████████                ████████████████
-  ████████████████                ████████████████
-  ████████████████                ████████████████
-  ████████████████                ████████████████
-  ████████████████                ████████████████
-  ████████████████                ████████████████
-  128 CPUs (0–127)                128 CPUs (128–255)
-
   Process — PID 4521
   ──────────────────
   Allowed CPUs ......... 16 / 256 (pinned)
   Currently on ......... CPU 163 → NUMA Node 1
-  Physical cores ....... 8 cores, 1 socket
-  NUMA span ............ 1 node [1]
 
-  ■ = allowed  ★ = current  · = not allowed
+  ■ = allowed  ★ = current  □ = not allowed
 
-  NUMA Node 0                     NUMA Node 1
-  ················                ················
-  ················                ················
-  ················                ■■■★■■■■■■■■■■■■
-  ················                ················
-  ················                ················
-  ················                ················
-  ················                ················
-  ················                ················
-  0 allowed                       16 allowed
-
-  GPU Locality
-  ────────────
-  ✓ GPU-a1b2...c3d4 (0000:3b:00.0) → NUMA Node 1 same NUMA
+  NUMA Node 0 — Socket 0         NUMA Node 1 — Socket 1
+  □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □    ■ ■ ■ ★ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■
+  □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □    □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □
+  ...                                 ...
+  0 of 128 CPUs                       16 of 128 CPUs
 ```
 
 Machine topology mode (no PID needed):
@@ -66,22 +40,17 @@ $ numa-check -topo
 
 numa-check — Machine Topology
 
-  CPU Topology
-  ────────────
-  256 CPUs, 2 NUMA nodes, 2 sockets
+  Topology
+  ────────
+  256 CPUs (128 physical cores), 2 NUMA nodes, 2 sockets, 4 GPUs
 
   NUMA Node 0 — Socket 0         NUMA Node 1 — Socket 1
-  ████████████████                ████████████████
-  ...                             ...
+  ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■    ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■
+  ...                                    ...
+  128 CPUs (0–127)                       128 CPUs (128–255)
 
-  GPU Topology
-  ────────────
-  4 GPUs
-
-  ■ GPU-a1b2...c3d4 (0000:3b:00.0) → NUMA Node 0
-  ■ GPU-e5f6...7890 (0000:3c:00.0) → NUMA Node 0
-  ■ GPU-1234...5678 (0000:86:00.0) → NUMA Node 1
-  ■ GPU-abcd...ef01 (0000:87:00.0) → NUMA Node 1
+  ▀▀ GPU 0    ▀▀ GPU 1               ▀▀ GPU 2    ▀▀ GPU 3
+  2 GPUs                              2 GPUs
 ```
 
 ## Install
@@ -104,15 +73,45 @@ numa-check -pid <PID>
 # By Kubernetes pod/container (requires crictl)
 numa-check -pod <pod-name> -container <container-name>
 
-# With GPU NUMA analysis (requires nvidia-smi)
-numa-check -pid <PID> -gpu
-
 # With numastat memory stats
 numa-check -pid <PID> -numastat
+
+# Show version
+numa-check -version
+
+# Enable debug logging
+numa-check -pid <PID> -debug
+```
+
+## Flags
+
+| Flag | Description |
+|---|---|
+| `-pid` | Process ID to analyze |
+| `-pod` | Pod name (for container lookup via crictl) |
+| `-container` | Container name (in the pod) |
+| `-topo` | Show machine topology only (no process analysis) |
+| `-numastat` | Print numastat memory stats (requires `-pid` or `-pod`/`-container`) |
+| `-debug` | Enable debug logging to stderr |
+| `-version` | Print version and exit |
+
+## GPU Detection
+
+GPU detection is automatic and requires no flags. The tool uses a two-phase approach:
+
+1. **PCI scan**: Checks `/sys/bus/pci/devices/*/vendor` for NVIDIA devices (vendor `0x10de`). If no NVIDIA PCI devices are found, GPU analysis is skipped entirely.
+2. **nvidia-smi**: If NVIDIA PCI devices are detected, calls `nvidia-smi` for UUID/PCI mappings. If `nvidia-smi` is unavailable, GPUs are shown with PCI IDs only.
+
+## Color Output
+
+Output uses ANSI colors when stdout is a TTY. To disable colors, set the `NO_COLOR` environment variable:
+
+```
+NO_COLOR=1 numa-check -topo
 ```
 
 ## Requirements
 
 - Linux with `/proc` and `/sys`
-- Optional: `nvidia-smi` (GPU analysis), `crictl` (container lookup), `numastat` (memory stats)
+- Optional: `nvidia-smi` (GPU UUID mapping), `crictl` (container lookup), `numastat` (memory stats)
 - No external dependencies for core CPU/NUMA analysis — reads sysfs directly
