@@ -204,7 +204,6 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 	}
 
 	var allowedGPUs map[string]bool
-	var allowedGPUList []string
 	var gpuEnvErr bool
 	if len(gpus) > 0 {
 		procGPUs, err := getAllowedGPUs(fs, pid, gpus)
@@ -212,7 +211,6 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 			warnf("could not read process GPU environment: %v", err)
 			gpuEnvErr = true
 		} else if procGPUs != nil {
-			allowedGPUList = procGPUs
 			allowedGPUs = make(map[string]bool, len(procGPUs))
 			for _, uuid := range procGPUs {
 				allowedGPUs[uuid] = true
@@ -230,18 +228,18 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 			CurrentNUMA: cpuNUMANode,
 			NUMANodes:   toJSONNodes(nodes),
 			GPUs:        toJSONGPUs(gpus),
-			AllowedGPUs: allowedGPUList,
+			AllowedGPUs: mapKeys(allowedGPUs),
 		}
 		if systemCPUErr == nil {
 			out.SystemCPUs = systemCPUs
 		}
 		if containerRes != nil {
-			out.Resources = toJSONResources(*containerRes, gpus, allowedGPUs, gpuEnvErr)
+			out.Resources = toJSONResources(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr))
 		}
 		if showNumastat {
-			raw, err := runNumastat(cmd, pid)
+			raw, err := cmd.Run("numastat", "-p", fmt.Sprintf("%d", pid))
 			if err == nil {
-				out.Numastat = raw
+				out.Numastat = strings.TrimSpace(string(raw))
 			}
 		}
 		printJSON(out)
@@ -274,13 +272,7 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 	fmt.Println()
 
 	if containerRes != nil {
-		gpuCount := 0
-		if allowedGPUs != nil {
-			gpuCount = len(allowedGPUs)
-		} else if len(gpus) > 0 && !gpuEnvErr {
-			gpuCount = len(gpus)
-		}
-		resText := formatResources(*containerRes, gpuCount)
+		resText := formatResources(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr))
 		if resText != "" {
 			printSection("Container Resources")
 			fmt.Print(resText)
@@ -333,7 +325,7 @@ func toJSONGPUs(gpus []GPUDevice) []jsonGPU {
 	return out
 }
 
-func toJSONResources(res crictlResources, gpus []GPUDevice, allowedGPUs map[string]bool, gpuEnvErr bool) *jsonResources {
+func toJSONResources(res crictlResources, gc int) *jsonResources {
 	jr := &jsonResources{}
 	hasContent := false
 	if res.CPUShares > 2 {
@@ -350,20 +342,35 @@ func toJSONResources(res crictlResources, gpus []GPUDevice, allowedGPUs map[stri
 		jr.MemoryLimitBytes = &res.MemoryLimitInBytes
 		hasContent = true
 	}
-	gpuCount := 0
-	if allowedGPUs != nil {
-		gpuCount = len(allowedGPUs)
-	} else if len(gpus) > 0 && !gpuEnvErr {
-		gpuCount = len(gpus)
-	}
-	if gpuCount > 0 {
-		jr.GPUCount = gpuCount
+	if gc > 0 {
+		jr.GPUCount = gc
 		hasContent = true
 	}
 	if !hasContent {
 		return nil
 	}
 	return jr
+}
+
+func gpuCount(allowedGPUs map[string]bool, gpus []GPUDevice, envErr bool) int {
+	if allowedGPUs != nil {
+		return len(allowedGPUs)
+	}
+	if len(gpus) > 0 && !envErr {
+		return len(gpus)
+	}
+	return 0
+}
+
+func mapKeys(m map[string]bool) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func printJSON(v any) {
