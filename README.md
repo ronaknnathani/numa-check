@@ -67,6 +67,27 @@ All 16 CPUs on Node 1, none on Node 0 -- clean placement.
 $ numa-check -pod my-pod -container my-container
 ```
 
+This also shows a **Container Resources** section with CPU request/limit, memory limit, and GPU count, parsed from the container's cgroup settings:
+
+```
+  Container Resources
+  ───────────────────
+  CPU request .......... 8.0 cores
+  CPU limit ............ 16.0 cores
+  Memory limit ......... 64.0 GiB
+  GPUs ................. 2
+```
+
+**JSON output** for scripting and automation:
+
+```
+$ numa-check -topo -json
+$ numa-check -pid 4521 -json
+$ numa-check -pod my-pod -container my-container -json -numastat
+```
+
+The `-json` flag replaces the visual grid with machine-readable JSON. Works with both `-topo` and process analysis modes. When combined with `-numastat`, the numastat output is included in the JSON. Container resources are included automatically when using `-pod`/`-container`.
+
 **Include numastat memory stats:**
 
 ```
