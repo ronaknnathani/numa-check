@@ -34,20 +34,28 @@ func main() {
 	var cfg config
 	var showVersion bool
 
-	flag.IntVar(&cfg.pid, "pid", 0, "Process ID to analyze")
-	flag.StringVar(&cfg.pod, "pod", "", "Pod name (for container lookup via crictl)")
-	flag.StringVar(&cfg.container, "container", "", "Container name (in the pod)")
-	flag.BoolVar(&cfg.numastat, "numastat", false, "Print numastat memory stats")
-	flag.BoolVar(&cfg.topoOnly, "topo", false, "Show machine topology only (no process analysis)")
-	flag.BoolVar(&cfg.debug, "debug", false, "Enable debug logging")
-	flag.BoolVar(&cfg.jsonOut, "json", false, "Output in JSON format")
-	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
+	flag.IntVar(&cfg.pid, "pid", 0, "process ID to analyze")
+	flag.StringVar(&cfg.pod, "pod", "", "pod name (requires -container)")
+	flag.StringVar(&cfg.container, "container", "", "container name (requires -pod)")
+	flag.BoolVar(&cfg.numastat, "numastat", false, "include numastat memory stats")
+	flag.BoolVar(&cfg.topoOnly, "topo", false, "machine topology only (no PID required)")
+	flag.BoolVar(&cfg.debug, "debug", false, "enable debug logging")
+	flag.BoolVar(&cfg.jsonOut, "json", false, "output in JSON format")
+	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: numa-check [flags]\n\n")
 		fmt.Fprintf(os.Stderr, "Analyze NUMA topology for a Linux process.\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, `
+Examples:
+  numa-check -topo                              machine topology only
+  numa-check -pid 12345                         analyze a process
+  numa-check -pod mypod -container mycontainer  analyze a container
+  numa-check -pid 12345 -numastat               include NUMA memory stats
+  numa-check -pid 12345 -json                   JSON output
+`)
 	}
 	flag.Parse()
 
