@@ -21,62 +21,26 @@ Copy the binary to your target node. No external dependencies for core analysis 
 **See the machine topology** (no PID needed):
 
 ```
-$ numa-check -topo
-
-numa-check — Machine Topology
-
-  Topology
-  ────────
-  256 CPUs (128 physical cores), 2 NUMA nodes, 2 sockets, 4 GPUs
-
-  NUMA Node 0 — Socket 0         NUMA Node 1 — Socket 1
-  ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■    ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■
-  ...                                    ...
-  128 CPUs (0–127)                       128 CPUs (128–255)
-
-  ▀▀ GPU 0    ▀▀ GPU 1               ▀▀ GPU 2    ▀▀ GPU 3
-  2 GPUs                              2 GPUs
+numa-check -topo
 ```
 
-**Check a process by PID** -- the grid shows which CPUs are allowed (`■`), which CPU is currently running (`★`), and which are unavailable (`□`):
+![Machine topology](images/topo.png)
+
+**Check a process by PID** -- the grid shows which CPUs are allowed, which CPU is currently running, and which are unavailable:
 
 ```
-$ numa-check -pid 4521
-
-numa-check — PID 4521
-
-  Process — PID 4521
-  ──────────────────
-  Allowed CPUs ......... 16 / 256 (pinned)
-  Currently on ......... CPU 163 → NUMA Node 1
-
-  ■ = allowed  ★ = current  □ = not allowed
-
-  NUMA Node 0 — Socket 0         NUMA Node 1 — Socket 1
-  □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □    ■ ■ ■ ★ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■
-  □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □    □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □
-  ...                                 ...
-  0 of 128 CPUs                       16 of 128 CPUs
+numa-check -pid <PID>
 ```
 
-All 16 CPUs on Node 1, none on Node 0 -- clean placement.
+![Process analysis](images/pid.png)
 
-**Check a Kubernetes container** (requires `crictl` on the node):
-
-```
-$ numa-check -pod my-pod -container my-container
-```
-
-This also shows a **Container Resources** section with CPU request/limit, memory limit, and GPU count, parsed from the container's cgroup settings:
+**Check a Kubernetes container** (requires `crictl` on the node) -- also shows container resource requests/limits:
 
 ```
-  Container Resources
-  ───────────────────
-  CPU request .......... 8.0 cores
-  CPU limit ............ 16.0 cores
-  Memory limit ......... 64.0 GiB
-  GPUs ................. 2
+numa-check -pod <pod> -container <container>
 ```
+
+![Container analysis](images/pod.png)
 
 **JSON output** for scripting and automation:
 
