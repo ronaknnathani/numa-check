@@ -81,10 +81,11 @@ func main() {
 		return
 	}
 
-	pid := cfg.pid
+	var pid int
+	var containerRes *crictlResources
 	switch {
-	case pid != 0:
-		// PID provided directly via -pid flag.
+	case cfg.pid != 0:
+		pid = cfg.pid
 	case cfg.pod != "" || cfg.container != "":
 		if cfg.pod == "" {
 			fatalf("-pod is required when -container is set")
@@ -92,11 +93,12 @@ func main() {
 		if cfg.container == "" {
 			fatalf("-container is required when -pod is set")
 		}
-		var err error
-		pid, err = getPIDFromContainer(cmd, cfg.pod, cfg.container)
+		info, err := getContainerInfo(cmd, cfg.pod, cfg.container)
 		if err != nil {
 			fatalf("container lookup failed: %v", err)
 		}
+		pid = info.PID
+		containerRes = &info.Resources
 	default:
 		if cfg.numastat {
 			fatalf("-numastat requires -pid or -pod/-container")
@@ -105,7 +107,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	runAnalysis(fs, cmd, pid, cfg.numastat)
+	runAnalysis(fs, cmd, pid, cfg.numastat, containerRes)
 }
 
 func runTopoOnly(fs FileSystem, cmd CommandRunner) {
@@ -148,7 +150,7 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner) {
 	fmt.Println()
 }
 
-func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat bool) {
+func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat bool, containerRes *crictlResources) {
 	affinityList, err := getCPUAffinity(pid)
 	if err != nil {
 		fatalf("getting CPU affinity: %v", err)
@@ -225,6 +227,21 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat bool) {
 		}
 	}
 	fmt.Println()
+
+	if containerRes != nil {
+		gpuCount := 0
+		if allowedGPUs != nil {
+			gpuCount = len(allowedGPUs)
+		} else if len(gpus) > 0 && !gpuEnvErr {
+			gpuCount = len(gpus)
+		}
+		resText := formatResources(*containerRes, gpuCount)
+		if resText != "" {
+			printSection("Container Resources")
+			fmt.Print(resText)
+			fmt.Println()
+		}
+	}
 
 	fmt.Printf("  %s = allowed  %s = current  %s = not allowed\n\n",
 		col(ansiGreen, "■"), col(ansiBrightYellow, "★"), col(ansiDim, "□"))

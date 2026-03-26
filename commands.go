@@ -35,16 +35,16 @@ func getGPUInfo(cmd CommandRunner) (map[string]string, error) {
 	return gpuMap, nil
 }
 
-func getPIDFromContainer(cmd CommandRunner, podName, containerName string) (int, error) {
-	slog.Debug("looking up container PID", "pod", podName, "container", containerName)
+func getContainerInfo(cmd CommandRunner, podName, containerName string) (ContainerInfo, error) {
+	slog.Debug("looking up container", "pod", podName, "container", containerName)
 	out, err := cmd.Run("crictl", "ps", "-o", "json")
 	if err != nil {
-		return 0, fmt.Errorf("failed to run crictl ps: %v", execStderr(err))
+		return ContainerInfo{}, fmt.Errorf("failed to run crictl ps: %v", execStderr(err))
 	}
 
 	var psOut crictlPSOutput
 	if err := json.Unmarshal(out, &psOut); err != nil {
-		return 0, fmt.Errorf("failed to parse crictl ps output: %v", err)
+		return ContainerInfo{}, fmt.Errorf("failed to parse crictl ps output: %v", err)
 	}
 
 	var targetContainerID string
@@ -57,25 +57,66 @@ func getPIDFromContainer(cmd CommandRunner, podName, containerName string) (int,
 		}
 	}
 	if targetContainerID == "" {
-		return 0, fmt.Errorf("container %q in pod %q not found", containerName, podName)
+		return ContainerInfo{}, fmt.Errorf("container %q in pod %q not found", containerName, podName)
 	}
 
 	inspectOut, err := cmd.Run("crictl", "inspect", "-o", "json", targetContainerID)
 	if err != nil {
-		return 0, fmt.Errorf("crictl inspect failed: %v", execStderr(err))
+		return ContainerInfo{}, fmt.Errorf("crictl inspect failed: %v", execStderr(err))
 	}
 
 	var inspectData crictlInspectOutput
 	if err := json.Unmarshal(inspectOut, &inspectData); err != nil {
-		return 0, fmt.Errorf("failed to parse crictl inspect output: %v", err)
+		return ContainerInfo{}, fmt.Errorf("failed to parse crictl inspect output: %v", err)
 	}
 
 	if inspectData.Info.PID <= 0 {
-		return 0, fmt.Errorf("invalid PID %d in crictl inspect output", inspectData.Info.PID)
+		return ContainerInfo{}, fmt.Errorf("invalid PID %d in crictl inspect output", inspectData.Info.PID)
 	}
 
-	slog.Debug("resolved container PID", "pid", inspectData.Info.PID)
-	return inspectData.Info.PID, nil
+	slog.Debug("resolved container", "pid", inspectData.Info.PID,
+		"cpu_quota", inspectData.Info.Config.Linux.Resources.CPUQuota,
+		"cpu_period", inspectData.Info.Config.Linux.Resources.CPUPeriod,
+		"mem_limit", inspectData.Info.Config.Linux.Resources.MemoryLimitInBytes)
+
+	return ContainerInfo{
+		PID:       inspectData.Info.PID,
+		Resources: inspectData.Info.Config.Linux.Resources,
+	}, nil
+}
+
+func formatResources(res crictlResources, gpuCount int) string {
+	var sb strings.Builder
+	if res.CPUShares > 2 {
+		cores := float64(res.CPUShares) / 1024
+		sb.WriteString(fmt.Sprintf("  CPU request .......... %.1f cores\n", cores))
+	}
+	if res.CPUQuota > 0 && res.CPUPeriod > 0 {
+		cores := float64(res.CPUQuota) / float64(res.CPUPeriod)
+		sb.WriteString(fmt.Sprintf("  CPU limit ............ %.1f cores\n", cores))
+	}
+	if res.MemoryLimitInBytes > 0 {
+		sb.WriteString(fmt.Sprintf("  Memory limit ......... %s\n", formatBytes(res.MemoryLimitInBytes)))
+	}
+	if gpuCount > 0 {
+		sb.WriteString(fmt.Sprintf("  GPUs ................. %d\n", gpuCount))
+	}
+	return sb.String()
+}
+
+func formatBytes(b int64) string {
+	const (
+		gib = 1 << 30
+		mib = 1 << 20
+	)
+	switch {
+	case b >= gib:
+		return fmt.Sprintf("%.1f GiB", float64(b)/float64(gib))
+	case b >= mib:
+		return fmt.Sprintf("%.1f MiB", float64(b)/float64(mib))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
 
 func runNumastat(cmd CommandRunner, pid int) (string, error) {

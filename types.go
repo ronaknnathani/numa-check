@@ -81,5 +81,27 @@ type crictlInspectOutput struct {
 }
 
 type crictlInspectInfo struct {
-	PID int `json:"pid"`
+	PID    int                   `json:"pid"`
+	Config crictlContainerConfig `json:"config"`
+}
+
+type crictlContainerConfig struct {
+	Linux crictlLinux `json:"linux"`
+}
+
+type crictlLinux struct {
+	Resources crictlResources `json:"resources"`
+}
+
+type crictlResources struct {
+	CPUPeriod          int64 `json:"cpu_period"`
+	CPUQuota           int64 `json:"cpu_quota"`
+	CPUShares          int64 `json:"cpu_shares"`
+	MemoryLimitInBytes int64 `json:"memory_limit_in_bytes"`
+}
+
+// ContainerInfo holds PID and resource info from crictl inspect.
+type ContainerInfo struct {
+	PID       int
+	Resources crictlResources
 }

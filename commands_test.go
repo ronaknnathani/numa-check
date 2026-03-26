@@ -77,8 +77,38 @@ func TestGetGPUInfo(t *testing.T) {
 	})
 }
 
-func TestGetPIDFromContainer(t *testing.T) {
-	t.Run("successful lookup", func(t *testing.T) {
+func TestGetContainerInfo(t *testing.T) {
+	t.Run("successful lookup with resources", func(t *testing.T) {
+		psJSON := `{"containers":[{"id":"abc123","metadata":{"name":"mycontainer"},"labels":{"io.kubernetes.pod.name":"mypod"}}]}`
+		inspectJSON := `{"info":{"pid":4567,"config":{"linux":{"resources":{"cpu_period":100000,"cpu_quota":400000,"cpu_shares":4096,"memory_limit_in_bytes":8589934592}}}}}`
+
+		cmd := &mockCmd{calls: []mockCall{
+			{output: []byte(psJSON)},
+			{output: []byte(inspectJSON)},
+		}}
+
+		info, err := getContainerInfo(cmd, "mypod", "mycontainer")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if info.PID != 4567 {
+			t.Errorf("PID = %d, want 4567", info.PID)
+		}
+		if info.Resources.CPUQuota != 400000 {
+			t.Errorf("CPUQuota = %d, want 400000", info.Resources.CPUQuota)
+		}
+		if info.Resources.CPUPeriod != 100000 {
+			t.Errorf("CPUPeriod = %d, want 100000", info.Resources.CPUPeriod)
+		}
+		if info.Resources.CPUShares != 4096 {
+			t.Errorf("CPUShares = %d, want 4096", info.Resources.CPUShares)
+		}
+		if info.Resources.MemoryLimitInBytes != 8589934592 {
+			t.Errorf("MemoryLimitInBytes = %d, want 8589934592", info.Resources.MemoryLimitInBytes)
+		}
+	})
+
+	t.Run("minimal inspect JSON (PID only)", func(t *testing.T) {
 		psJSON := `{"containers":[{"id":"abc123","metadata":{"name":"mycontainer"},"labels":{"io.kubernetes.pod.name":"mypod"}}]}`
 		inspectJSON := `{"info":{"pid":4567}}`
 
@@ -87,12 +117,15 @@ func TestGetPIDFromContainer(t *testing.T) {
 			{output: []byte(inspectJSON)},
 		}}
 
-		pid, err := getPIDFromContainer(cmd, "mypod", "mycontainer")
+		info, err := getContainerInfo(cmd, "mypod", "mycontainer")
 		if err != nil {
-			t.Fatalf("getPIDFromContainer() unexpected error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
-		if pid != 4567 {
-			t.Errorf("getPIDFromContainer() = %d, want 4567", pid)
+		if info.PID != 4567 {
+			t.Errorf("PID = %d, want 4567", info.PID)
+		}
+		if info.Resources.CPUQuota != 0 {
+			t.Errorf("CPUQuota = %d, want 0 (missing)", info.Resources.CPUQuota)
 		}
 	})
 
@@ -103,12 +136,12 @@ func TestGetPIDFromContainer(t *testing.T) {
 			{output: []byte(psJSON)},
 		}}
 
-		_, err := getPIDFromContainer(cmd, "mypod", "mycontainer")
+		_, err := getContainerInfo(cmd, "mypod", "mycontainer")
 		if err == nil {
-			t.Error("getPIDFromContainer() expected error for missing container")
+			t.Error("expected error for missing container")
 		}
 		if !strings.Contains(err.Error(), "not found") {
-			t.Errorf("getPIDFromContainer() error = %q, want it to contain 'not found'", err.Error())
+			t.Errorf("error = %q, want it to contain 'not found'", err.Error())
 		}
 	})
 
@@ -119,9 +152,9 @@ func TestGetPIDFromContainer(t *testing.T) {
 			{output: []byte(psJSON)},
 		}}
 
-		_, err := getPIDFromContainer(cmd, "mypod", "mycontainer")
+		_, err := getContainerInfo(cmd, "mypod", "mycontainer")
 		if err == nil {
-			t.Error("getPIDFromContainer() expected error when pod name doesn't match")
+			t.Error("expected error when pod name doesn't match")
 		}
 	})
 
@@ -134,27 +167,9 @@ func TestGetPIDFromContainer(t *testing.T) {
 			{output: []byte(inspectJSON)},
 		}}
 
-		_, err := getPIDFromContainer(cmd, "mypod", "mycontainer")
+		_, err := getContainerInfo(cmd, "mypod", "mycontainer")
 		if err == nil {
-			t.Error("getPIDFromContainer() expected error for PID 0")
-		}
-		if !strings.Contains(err.Error(), "invalid PID") {
-			t.Errorf("getPIDFromContainer() error = %q, want it to contain 'invalid PID'", err.Error())
-		}
-	})
-
-	t.Run("invalid PID negative", func(t *testing.T) {
-		psJSON := `{"containers":[{"id":"abc123","metadata":{"name":"mycontainer"},"labels":{"io.kubernetes.pod.name":"mypod"}}]}`
-		inspectJSON := `{"info":{"pid":-1}}`
-
-		cmd := &mockCmd{calls: []mockCall{
-			{output: []byte(psJSON)},
-			{output: []byte(inspectJSON)},
-		}}
-
-		_, err := getPIDFromContainer(cmd, "mypod", "mycontainer")
-		if err == nil {
-			t.Error("getPIDFromContainer() expected error for negative PID")
+			t.Error("expected error for PID 0")
 		}
 	})
 
@@ -163,9 +178,9 @@ func TestGetPIDFromContainer(t *testing.T) {
 			{err: fmt.Errorf("crictl not found")},
 		}}
 
-		_, err := getPIDFromContainer(cmd, "mypod", "mycontainer")
+		_, err := getContainerInfo(cmd, "mypod", "mycontainer")
 		if err == nil {
-			t.Error("getPIDFromContainer() expected error when crictl ps fails")
+			t.Error("expected error when crictl ps fails")
 		}
 	})
 
@@ -177,11 +192,80 @@ func TestGetPIDFromContainer(t *testing.T) {
 			{err: fmt.Errorf("inspect failed")},
 		}}
 
-		_, err := getPIDFromContainer(cmd, "mypod", "mycontainer")
+		_, err := getContainerInfo(cmd, "mypod", "mycontainer")
 		if err == nil {
-			t.Error("getPIDFromContainer() expected error when crictl inspect fails")
+			t.Error("expected error when crictl inspect fails")
 		}
 	})
+}
+
+func TestFormatResources(t *testing.T) {
+	t.Run("full resources", func(t *testing.T) {
+		res := crictlResources{
+			CPUPeriod:          100000,
+			CPUQuota:           400000,
+			CPUShares:          4096,
+			MemoryLimitInBytes: 8589934592,
+		}
+		got := formatResources(res, 2)
+		if !strings.Contains(got, "4.0 cores") {
+			t.Errorf("expected CPU request '4.0 cores', got:\n%s", got)
+		}
+		if !strings.Contains(got, "4.0 cores") {
+			t.Errorf("expected CPU limit '4.0 cores', got:\n%s", got)
+		}
+		if !strings.Contains(got, "8.0 GiB") {
+			t.Errorf("expected memory '8.0 GiB', got:\n%s", got)
+		}
+		if !strings.Contains(got, "2") {
+			t.Errorf("expected GPU count '2', got:\n%s", got)
+		}
+	})
+
+	t.Run("no resources (all zero)", func(t *testing.T) {
+		got := formatResources(crictlResources{}, 0)
+		if got != "" {
+			t.Errorf("expected empty string for zero resources, got:\n%s", got)
+		}
+	})
+
+	t.Run("cpu only no memory", func(t *testing.T) {
+		res := crictlResources{CPUPeriod: 100000, CPUQuota: 200000}
+		got := formatResources(res, 0)
+		if !strings.Contains(got, "2.0 cores") {
+			t.Errorf("expected CPU limit '2.0 cores', got:\n%s", got)
+		}
+		if strings.Contains(got, "Memory") {
+			t.Errorf("should not contain Memory line, got:\n%s", got)
+		}
+	})
+
+	t.Run("default cpu shares (2) omitted", func(t *testing.T) {
+		res := crictlResources{CPUShares: 2}
+		got := formatResources(res, 0)
+		if strings.Contains(got, "request") {
+			t.Errorf("default CPU shares should be omitted, got:\n%s", got)
+		}
+	})
+}
+
+func TestFormatBytes(t *testing.T) {
+	tests := []struct {
+		input int64
+		want  string
+	}{
+		{8589934592, "8.0 GiB"},
+		{1073741824, "1.0 GiB"},
+		{536870912, "512.0 MiB"},
+		{1048576, "1.0 MiB"},
+		{1024, "1024 B"},
+	}
+	for _, tt := range tests {
+		got := formatBytes(tt.input)
+		if got != tt.want {
+			t.Errorf("formatBytes(%d) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
 }
 
 func TestRunNumastat(t *testing.T) {
