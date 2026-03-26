@@ -105,3 +105,47 @@ type ContainerInfo struct {
 	PID       int
 	Resources crictlResources
 }
+
+// JSON output types.
+
+type jsonTopoOutput struct {
+	TotalCPUs     int            `json:"total_cpus"`
+	PhysicalCores int            `json:"physical_cores"`
+	Sockets       int            `json:"sockets"`
+	NUMANodes     []jsonNUMANode `json:"numa_nodes"`
+	GPUs          []jsonGPU      `json:"gpus,omitempty"`
+}
+
+type jsonProcessOutput struct {
+	PID          int              `json:"pid"`
+	AllowedCPUs  []int            `json:"allowed_cpus"`
+	SystemCPUs   int              `json:"system_cpus,omitempty"`
+	Pinned       bool             `json:"pinned"`
+	CurrentCPU   int              `json:"current_cpu"`
+	CurrentNUMA  int              `json:"current_numa_node"`
+	NUMANodes    []jsonNUMANode   `json:"numa_nodes"`
+	GPUs         []jsonGPU        `json:"gpus,omitempty"`
+	AllowedGPUs  []string         `json:"allowed_gpus,omitempty"`
+	Resources    *jsonResources   `json:"container_resources,omitempty"`
+	Numastat     string           `json:"numastat,omitempty"`
+}
+
+type jsonNUMANode struct {
+	ID       int   `json:"id"`
+	SocketID int   `json:"socket_id"`
+	CPUs     []int `json:"cpus"`
+}
+
+type jsonGPU struct {
+	Index    int    `json:"index"`
+	UUID     string `json:"uuid,omitempty"`
+	PCIID    string `json:"pci_id"`
+	NUMANode int    `json:"numa_node"`
+}
+
+type jsonResources struct {
+	CPURequest         *float64 `json:"cpu_request_cores,omitempty"`
+	CPULimit           *float64 `json:"cpu_limit_cores,omitempty"`
+	MemoryLimitBytes   *int64   `json:"memory_limit_bytes,omitempty"`
+	GPUCount           int      `json:"gpu_count,omitempty"`
+}

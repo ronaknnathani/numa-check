@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -17,6 +18,7 @@ type config struct {
 	numastat  bool
 	topoOnly  bool
 	debug     bool
+	jsonOut   bool
 }
 
 func fatalf(format string, args ...any) {
@@ -38,6 +40,7 @@ func main() {
 	flag.BoolVar(&cfg.numastat, "numastat", false, "Print numastat memory stats")
 	flag.BoolVar(&cfg.topoOnly, "topo", false, "Show machine topology only (no process analysis)")
 	flag.BoolVar(&cfg.debug, "debug", false, "Enable debug logging")
+	flag.BoolVar(&cfg.jsonOut, "json", false, "Output in JSON format")
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 
 	flag.Usage = func() {
@@ -77,7 +80,7 @@ func main() {
 	cmd := execRunner{}
 
 	if cfg.topoOnly {
-		runTopoOnly(fs, cmd)
+		runTopoOnly(fs, cmd, cfg.jsonOut)
 		return
 	}
 
@@ -107,10 +110,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	runAnalysis(fs, cmd, pid, cfg.numastat, containerRes)
+	runAnalysis(fs, cmd, pid, cfg.numastat, cfg.jsonOut, containerRes)
 }
 
-func runTopoOnly(fs FileSystem, cmd CommandRunner) {
+func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool) {
 	numaMap, err := buildNUMAMap(fs)
 	if err != nil {
 		fatalf("reading NUMA topology: %v", err)
@@ -136,6 +139,18 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner) {
 		}
 	}
 
+	if jsonOut {
+		out := jsonTopoOutput{
+			TotalCPUs:     len(numaMap),
+			PhysicalCores: len(allCores),
+			Sockets:       len(totalSockets),
+			NUMANodes:     toJSONNodes(nodes),
+			GPUs:          toJSONGPUs(gpus),
+		}
+		printJSON(out)
+		return
+	}
+
 	fmt.Printf("\n%s\n\n", col(ansiBold, "numa-check — Machine Topology"))
 	printSection("Topology")
 
@@ -150,7 +165,7 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner) {
 	fmt.Println()
 }
 
-func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat bool, containerRes *crictlResources) {
+func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOut bool, containerRes *crictlResources) {
 	affinityList, err := getCPUAffinity(pid)
 	if err != nil {
 		fatalf("getting CPU affinity: %v", err)
@@ -189,6 +204,7 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat bool, c
 	}
 
 	var allowedGPUs map[string]bool
+	var allowedGPUList []string
 	var gpuEnvErr bool
 	if len(gpus) > 0 {
 		procGPUs, err := getAllowedGPUs(fs, pid, gpus)
@@ -196,11 +212,40 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat bool, c
 			warnf("could not read process GPU environment: %v", err)
 			gpuEnvErr = true
 		} else if procGPUs != nil {
+			allowedGPUList = procGPUs
 			allowedGPUs = make(map[string]bool, len(procGPUs))
 			for _, uuid := range procGPUs {
 				allowedGPUs[uuid] = true
 			}
 		}
+	}
+
+	if jsonOut {
+		pinned := systemCPUErr == nil && len(affinityList) < systemCPUs
+		out := jsonProcessOutput{
+			PID:         pid,
+			AllowedCPUs: affinityList,
+			Pinned:      pinned,
+			CurrentCPU:  currentCPU,
+			CurrentNUMA: cpuNUMANode,
+			NUMANodes:   toJSONNodes(nodes),
+			GPUs:        toJSONGPUs(gpus),
+			AllowedGPUs: allowedGPUList,
+		}
+		if systemCPUErr == nil {
+			out.SystemCPUs = systemCPUs
+		}
+		if containerRes != nil {
+			out.Resources = toJSONResources(*containerRes, gpus, allowedGPUs, gpuEnvErr)
+		}
+		if showNumastat {
+			raw, err := runNumastat(cmd, pid)
+			if err == nil {
+				out.Numastat = raw
+			}
+		}
+		printJSON(out)
+		return
 	}
 
 	fmt.Printf("\n%s\n\n", col(ansiBold, fmt.Sprintf("numa-check — PID %d", pid)))
@@ -267,4 +312,64 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat bool, c
 	}
 
 	fmt.Println()
+}
+
+func toJSONNodes(nodes []NUMANodeInfo) []jsonNUMANode {
+	out := make([]jsonNUMANode, len(nodes))
+	for i, n := range nodes {
+		out[i] = jsonNUMANode{ID: n.ID, SocketID: n.SocketID, CPUs: n.CPUs}
+	}
+	return out
+}
+
+func toJSONGPUs(gpus []GPUDevice) []jsonGPU {
+	if len(gpus) == 0 {
+		return nil
+	}
+	out := make([]jsonGPU, len(gpus))
+	for i, g := range gpus {
+		out[i] = jsonGPU{Index: g.Index, UUID: g.UUID, PCIID: g.PCIID, NUMANode: g.NUMANode}
+	}
+	return out
+}
+
+func toJSONResources(res crictlResources, gpus []GPUDevice, allowedGPUs map[string]bool, gpuEnvErr bool) *jsonResources {
+	jr := &jsonResources{}
+	hasContent := false
+	if res.CPUShares > 2 {
+		v := float64(res.CPUShares) / 1024
+		jr.CPURequest = &v
+		hasContent = true
+	}
+	if res.CPUQuota > 0 && res.CPUPeriod > 0 {
+		v := float64(res.CPUQuota) / float64(res.CPUPeriod)
+		jr.CPULimit = &v
+		hasContent = true
+	}
+	if res.MemoryLimitInBytes > 0 {
+		jr.MemoryLimitBytes = &res.MemoryLimitInBytes
+		hasContent = true
+	}
+	gpuCount := 0
+	if allowedGPUs != nil {
+		gpuCount = len(allowedGPUs)
+	} else if len(gpus) > 0 && !gpuEnvErr {
+		gpuCount = len(gpus)
+	}
+	if gpuCount > 0 {
+		jr.GPUCount = gpuCount
+		hasContent = true
+	}
+	if !hasContent {
+		return nil
+	}
+	return jr
+}
+
+func printJSON(v any) {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		fatalf("encoding JSON: %v", err)
+	}
 }
