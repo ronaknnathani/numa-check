@@ -36,6 +36,8 @@ numa-check -pid <PID>                               # process NUMA analysis
 numa-check -pod <pod-name> -container <container-name>
 numa-check -pid <PID> -numastat                     # numastat memory stats
 numa-check -pid <PID> -debug                        # with debug logging
+numa-check -topo -cpumanager /var/lib/kubelet/cpu_manager_state  # CPU manager assignments
+numa-check -pid <PID> -cpumanager /var/lib/kubelet/cpu_manager_state
 ```
 
 ## Architecture
@@ -49,6 +51,7 @@ Single package (`package main`), split across files by concern:
 | `sysfs.go` | Sysfs/procfs readers (NUMA map, CPU topology, process info) |
 | `sysfs_linux.go` | Linux-only: `getCPUAffinity` via `unix.SchedGetaffinity` |
 | `sysfs_stub.go` | Non-Linux stub for `getCPUAffinity` |
+| `cpumanager.go` | Kubelet CPU manager state file reader |
 | `commands.go` | External command wrappers (nvidia-smi, crictl, numastat) |
 | `topology.go` | Data assembly, GPU discovery (2-phase: PCI + nvidia-smi) |
 | `display.go` | Grid rendering, ANSI colors, formatting |
@@ -72,6 +75,7 @@ Functions accept `FileSystem` and `CommandRunner` interfaces instead of calling 
 | GPU NUMA node | `/sys/bus/pci/devices/<pciID>/numa_node` |
 | Container PID | `crictl` (only with `-pod`/`-container` flags) |
 | NUMA memory stats | `numastat` (only with `-numastat` flag) |
+| CPU manager state | `{kubelet-root}/cpu_manager_state` (only with `-cpumanager` flag) |
 
 ### Output modes
 
@@ -90,3 +94,5 @@ Output uses ANSI colors when stdout is a TTY. Respects `NO_COLOR` env var.
 - `detectNVIDIAGPUsPCI(fs)` — scans PCI bus for NVIDIA GPUs
 - `discoverGPUs(fs, cmd)` — two-phase GPU detection (PCI + nvidia-smi)
 - `printNodesGrid(...)` — renders NUMA node CPU grids side-by-side
+- `readCPUManagerState(fs, path)` — reads and parses kubelet cpu_manager_state JSON
+- `parseCPUManagerEntries(state)` — converts raw state entries into sorted parsed entries

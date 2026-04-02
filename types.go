@@ -106,14 +106,30 @@ type ContainerInfo struct {
 	Resources crictlResources
 }
 
+// CPUManagerState represents the kubelet cpu_manager_state JSON file.
+type CPUManagerState struct {
+	PolicyName    string                       `json:"policyName"`
+	DefaultCPUSet string                       `json:"defaultCpuSet"`
+	Entries       map[string]map[string]string `json:"entries"`
+}
+
+// CPUManagerEntry is a parsed entry from CPU manager state.
+type CPUManagerEntry struct {
+	PodUID        string
+	ContainerName string
+	CPUs          []int
+	CPUSetRaw     string
+}
+
 // JSON output types.
 
 type jsonTopoOutput struct {
 	TotalCPUs     int            `json:"total_cpus"`
 	PhysicalCores int            `json:"physical_cores"`
 	Sockets       int            `json:"sockets"`
-	NUMANodes     []jsonNUMANode `json:"numa_nodes"`
-	GPUs          []jsonGPU      `json:"gpus,omitempty"`
+	NUMANodes     []jsonNUMANode  `json:"numa_nodes"`
+	GPUs          []jsonGPU       `json:"gpus,omitempty"`
+	CPUManager    *jsonCPUManager `json:"cpu_manager,omitempty"`
 }
 
 type jsonProcessOutput struct {
@@ -128,6 +144,7 @@ type jsonProcessOutput struct {
 	AllowedGPUs  []string         `json:"allowed_gpus,omitempty"`
 	Resources    *jsonResources   `json:"container_resources,omitempty"`
 	Numastat     string           `json:"numastat,omitempty"`
+	CPUManager   *jsonCPUManager  `json:"cpu_manager,omitempty"`
 }
 
 type jsonNUMANode struct {
@@ -148,4 +165,16 @@ type jsonResources struct {
 	CPULimit           *float64 `json:"cpu_limit_cores,omitempty"`
 	MemoryLimitBytes   *int64   `json:"memory_limit_bytes,omitempty"`
 	GPUCount           int      `json:"gpu_count,omitempty"`
+}
+
+type jsonCPUManager struct {
+	PolicyName  string                `json:"policy_name"`
+	DefaultCPUs []int                 `json:"default_cpus,omitempty"`
+	Entries     []jsonCPUManagerEntry `json:"entries,omitempty"`
+}
+
+type jsonCPUManagerEntry struct {
+	PodUID        string `json:"pod_uid"`
+	ContainerName string `json:"container_name"`
+	CPUs          []int  `json:"cpus"`
 }

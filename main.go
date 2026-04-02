@@ -12,13 +12,14 @@ import (
 var version = "dev"
 
 type config struct {
-	pid       int
-	pod       string
-	container string
-	numastat  bool
-	topoOnly  bool
-	debug     bool
-	jsonOut   bool
+	pid        int
+	pod        string
+	container  string
+	numastat   bool
+	topoOnly   bool
+	debug      bool
+	jsonOut    bool
+	cpuManager string
 }
 
 func fatalf(format string, args ...any) {
@@ -41,6 +42,7 @@ func main() {
 	flag.BoolVar(&cfg.topoOnly, "topo", false, "machine topology only (no PID required)")
 	flag.BoolVar(&cfg.debug, "debug", false, "enable debug logging")
 	flag.BoolVar(&cfg.jsonOut, "json", false, "output in JSON format")
+	flag.StringVar(&cfg.cpuManager, "cpumanager", "", "path to kubelet cpu_manager_state file")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 
 	flag.Usage = func() {
@@ -55,6 +57,7 @@ Examples:
   numa-check -pod mypod -container mycontainer  analyze a container
   numa-check -pid 12345 -numastat               include NUMA memory stats
   numa-check -pid 12345 -json                   JSON output
+  numa-check -topo -cpumanager /var/lib/kubelet/cpu_manager_state
 `)
 	}
 	flag.Parse()
@@ -88,7 +91,7 @@ Examples:
 	cmd := execRunner{}
 
 	if cfg.topoOnly {
-		runTopoOnly(fs, cmd, cfg.jsonOut)
+		runTopoOnly(fs, cmd, cfg.jsonOut, cfg.cpuManager)
 		return
 	}
 
@@ -118,10 +121,10 @@ Examples:
 		os.Exit(1)
 	}
 
-	runAnalysis(fs, cmd, pid, cfg.numastat, cfg.jsonOut, containerRes)
+	runAnalysis(fs, cmd, pid, cfg.numastat, cfg.jsonOut, containerRes, cfg.cpuManager)
 }
 
-func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool) {
+func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath string) {
 	numaMap, err := buildNUMAMap(fs)
 	if err != nil {
 		fatalf("reading NUMA topology: %v", err)
@@ -147,6 +150,20 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool) {
 		}
 	}
 
+	var cpuMgrState *CPUManagerState
+	var cpuMgrEntries []CPUManagerEntry
+	if cpuManagerPath != "" {
+		state, err := readCPUManagerState(fs, cpuManagerPath)
+		if err != nil {
+			warnf("cpu manager: %v", err)
+		} else {
+			cpuMgrState = state
+			if state.PolicyName == "static" {
+				cpuMgrEntries = parseCPUManagerEntries(state)
+			}
+		}
+	}
+
 	if jsonOut {
 		out := jsonTopoOutput{
 			TotalCPUs:     len(numaMap),
@@ -154,6 +171,9 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool) {
 			Sockets:       len(totalSockets),
 			NUMANodes:     toJSONNodes(nodes),
 			GPUs:          toJSONGPUs(gpus),
+		}
+		if cpuMgrState != nil {
+			out.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries)
 		}
 		printJSON(out)
 		return
@@ -170,10 +190,20 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool) {
 	fmt.Printf("%s\n\n", summary)
 
 	printNodesGrid(nodes, ModeMachine, nil, -1, nil, nil)
+
+	if cpuMgrState != nil {
+		fmt.Println()
+		if cpuMgrState.PolicyName != "static" {
+			fmt.Printf("  CPU Manager policy is %q — CPUs are not exclusively assigned to containers\n", cpuMgrState.PolicyName)
+		} else {
+			printCPUManagerSection(cpuMgrState, cpuMgrEntries)
+		}
+	}
+
 	fmt.Println()
 }
 
-func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOut bool, containerRes *crictlResources) {
+func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOut bool, containerRes *crictlResources, cpuManagerPath string) {
 	affinityList, err := getCPUAffinity(pid)
 	if err != nil {
 		fatalf("getting CPU affinity: %v", err)
@@ -226,6 +256,20 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 		}
 	}
 
+	var cpuMgrState *CPUManagerState
+	var cpuMgrEntries []CPUManagerEntry
+	if cpuManagerPath != "" {
+		state, err := readCPUManagerState(fs, cpuManagerPath)
+		if err != nil {
+			warnf("cpu manager: %v", err)
+		} else {
+			cpuMgrState = state
+			if state.PolicyName == "static" {
+				cpuMgrEntries = parseCPUManagerEntries(state)
+			}
+		}
+	}
+
 	if jsonOut {
 		pinned := systemCPUErr == nil && len(affinityList) < systemCPUs
 		out := jsonProcessOutput{
@@ -249,6 +293,9 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 			if err == nil {
 				out.Numastat = strings.TrimSpace(string(raw))
 			}
+		}
+		if cpuMgrState != nil {
+			out.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries)
 		}
 		printJSON(out)
 		return
@@ -299,6 +346,15 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 		}
 	}
 	printNodesGrid(processGridNodes, ModeProcess, allowedSet, currentCPU, processNodes, allowedGPUs)
+
+	if cpuMgrState != nil {
+		fmt.Println()
+		if cpuMgrState.PolicyName != "static" {
+			fmt.Printf("  CPU Manager policy is %q — CPUs are not exclusively assigned to containers\n", cpuMgrState.PolicyName)
+		} else {
+			printCPUManagerSection(cpuMgrState, cpuMgrEntries)
+		}
+	}
 
 	if showNumastat {
 		fmt.Println()

@@ -263,6 +263,37 @@ func renderGrid(cpus []int, mode DisplayMode, allowedSet map[int]bool, currentCP
 	return rows
 }
 
+func printCPUManagerSection(state *CPUManagerState, entries []CPUManagerEntry) {
+	printSection("CPU Manager")
+	fmt.Printf("  Policy .............. %s\n", state.PolicyName)
+	if state.DefaultCPUSet != "" {
+		if cpus, err := expandCPUList(state.DefaultCPUSet); err == nil {
+			fmt.Printf("  Default CPUs ........ %s (%d CPUs available for shared containers)\n", state.DefaultCPUSet, len(cpus))
+		} else {
+			fmt.Printf("  Default CPUs ........ %s\n", state.DefaultCPUSet)
+		}
+	} else {
+		fmt.Printf("  Default CPUs ........ none (all CPUs exclusively assigned)\n")
+	}
+
+	if len(entries) == 0 {
+		fmt.Printf("\n  No containers with exclusive CPU assignments\n")
+		return
+	}
+
+	fmt.Printf("\n  Exclusively assigned:\n")
+	for _, e := range entries {
+		uid := e.PodUID
+		if len(uid) > 12 {
+			uid = uid[:12]
+		}
+		fmt.Printf("    %s / %s %s %s (%d CPUs)\n",
+			uid, e.ContainerName,
+			col(ansiDim, ".."),
+			e.CPUSetRaw, len(e.CPUs))
+	}
+}
+
 func gridRowVisualWidth(cpus []int, row int) int {
 	start := row * gridCols
 	n := len(cpus) - start
