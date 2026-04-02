@@ -157,8 +157,12 @@ func TestToJSONCPUManager(t *testing.T) {
 	entries := []CPUManagerEntry{
 		{PodUID: "pod-uid-1", ContainerName: "main", CPUs: []int{4, 5, 6, 7}},
 	}
+	nodes := []NUMANodeInfo{
+		{ID: 0, CPUs: []int{0, 1, 2, 3, 4, 5, 6, 7}},
+		{ID: 1, CPUs: []int{8, 9, 10, 11, 12, 13, 14, 15}},
+	}
 
-	got := toJSONCPUManager(state, entries)
+	got := toJSONCPUManager(state, entries, nodes)
 	if got.PolicyName != "static" {
 		t.Errorf("PolicyName = %q, want %q", got.PolicyName, "static")
 	}
@@ -170,5 +174,18 @@ func TestToJSONCPUManager(t *testing.T) {
 	}
 	if got.Entries[0].PodUID != "pod-uid-1" || got.Entries[0].ContainerName != "main" {
 		t.Errorf("Entry = %+v, want pod-uid-1/main", got.Entries[0])
+	}
+
+	// Per-NUMA-node: CPUs 4-7 are exclusive on node 0, node 1 has none.
+	if len(got.PerNUMANode) != 2 {
+		t.Fatalf("len(PerNUMANode) = %d, want 2", len(got.PerNUMANode))
+	}
+	n0 := got.PerNUMANode[0]
+	if n0.NodeID != 0 || n0.ExclusiveCPUs != 4 || n0.RemainingCPUs != 4 || n0.TotalCPUs != 8 {
+		t.Errorf("Node 0 = %+v, want {0, 4, 4, 8}", n0)
+	}
+	n1 := got.PerNUMANode[1]
+	if n1.NodeID != 1 || n1.ExclusiveCPUs != 0 || n1.RemainingCPUs != 8 || n1.TotalCPUs != 8 {
+		t.Errorf("Node 1 = %+v, want {1, 0, 8, 8}", n1)
 	}
 }

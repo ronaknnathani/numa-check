@@ -168,13 +168,21 @@ type jsonResources struct {
 }
 
 type jsonCPUManager struct {
-	PolicyName  string                `json:"policy_name"`
-	DefaultCPUs []int                 `json:"default_cpus,omitempty"`
-	Entries     []jsonCPUManagerEntry `json:"entries,omitempty"`
+	PolicyName  string                   `json:"policy_name"`
+	DefaultCPUs []int                    `json:"default_cpus,omitempty"`
+	Entries     []jsonCPUManagerEntry    `json:"entries,omitempty"`
+	PerNUMANode []jsonCPUManagerNUMANode `json:"per_numa_node,omitempty"`
 }
 
 type jsonCPUManagerEntry struct {
 	PodUID        string `json:"pod_uid"`
 	ContainerName string `json:"container_name"`
 	CPUs          []int  `json:"cpus"`
+}
+
+type jsonCPUManagerNUMANode struct {
+	NodeID        int `json:"node_id"`
+	ExclusiveCPUs int `json:"exclusive_cpus"`
+	RemainingCPUs int `json:"remaining_cpus"`
+	TotalCPUs     int `json:"total_cpus"`
 }

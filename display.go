@@ -263,7 +263,7 @@ func renderGrid(cpus []int, mode DisplayMode, allowedSet map[int]bool, currentCP
 	return rows
 }
 
-func printCPUManagerSection(state *CPUManagerState, entries []CPUManagerEntry) {
+func printCPUManagerSection(state *CPUManagerState, entries []CPUManagerEntry, nodes []NUMANodeInfo) {
 	printSection("CPU Manager")
 	fmt.Printf("  Policy .............. %s\n", state.PolicyName)
 	if state.DefaultCPUSet != "" {
@@ -278,19 +278,29 @@ func printCPUManagerSection(state *CPUManagerState, entries []CPUManagerEntry) {
 
 	if len(entries) == 0 {
 		fmt.Printf("\n  No containers with exclusive CPU assignments\n")
+	} else {
+		fmt.Printf("\n  Exclusively assigned:\n")
+		for _, e := range entries {
+			uid := e.PodUID
+			if len(uid) > 12 {
+				uid = uid[:12]
+			}
+			fmt.Printf("    %s / %s %s %s (%d CPUs)\n",
+				uid, e.ContainerName,
+				col(ansiDim, ".."),
+				e.CPUSetRaw, len(e.CPUs))
+		}
+	}
+
+	stats := perNUMANodeStats(entries, nodes)
+	if len(stats) == 0 {
 		return
 	}
 
-	fmt.Printf("\n  Exclusively assigned:\n")
-	for _, e := range entries {
-		uid := e.PodUID
-		if len(uid) > 12 {
-			uid = uid[:12]
-		}
-		fmt.Printf("    %s / %s %s %s (%d CPUs)\n",
-			uid, e.ContainerName,
-			col(ansiDim, ".."),
-			e.CPUSetRaw, len(e.CPUs))
+	fmt.Printf("\n  Per NUMA node:\n")
+	for _, s := range stats {
+		fmt.Printf("    Node %d:  %d exclusive / %d remaining  (of %d)\n",
+			s.NodeID, s.ExclusiveCPUs, s.RemainingCPUs, s.TotalCPUs)
 	}
 }
 

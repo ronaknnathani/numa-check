@@ -173,7 +173,7 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 			GPUs:          toJSONGPUs(gpus),
 		}
 		if cpuMgrState != nil {
-			out.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries)
+			out.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
 		}
 		printJSON(out)
 		return
@@ -196,7 +196,7 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 		if cpuMgrState.PolicyName != "static" {
 			fmt.Printf("  CPU Manager policy is %q — CPUs are not exclusively assigned to containers\n", cpuMgrState.PolicyName)
 		} else {
-			printCPUManagerSection(cpuMgrState, cpuMgrEntries)
+			printCPUManagerSection(cpuMgrState, cpuMgrEntries, nodes)
 		}
 	}
 
@@ -295,7 +295,7 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 			}
 		}
 		if cpuMgrState != nil {
-			out.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries)
+			out.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
 		}
 		printJSON(out)
 		return
@@ -352,7 +352,7 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 		if cpuMgrState.PolicyName != "static" {
 			fmt.Printf("  CPU Manager policy is %q — CPUs are not exclusively assigned to containers\n", cpuMgrState.PolicyName)
 		} else {
-			printCPUManagerSection(cpuMgrState, cpuMgrEntries)
+			printCPUManagerSection(cpuMgrState, cpuMgrEntries, nodes)
 		}
 	}
 

@@ -45,7 +45,7 @@ func parseCPUManagerEntries(state *CPUManagerState) []CPUManagerEntry {
 	return entries
 }
 
-func toJSONCPUManager(state *CPUManagerState, entries []CPUManagerEntry) *jsonCPUManager {
+func toJSONCPUManager(state *CPUManagerState, entries []CPUManagerEntry, nodes []NUMANodeInfo) *jsonCPUManager {
 	jcm := &jsonCPUManager{
 		PolicyName: state.PolicyName,
 	}
@@ -61,5 +61,39 @@ func toJSONCPUManager(state *CPUManagerState, entries []CPUManagerEntry) *jsonCP
 			CPUs:          e.CPUs,
 		})
 	}
+
+	jcm.PerNUMANode = perNUMANodeStats(entries, nodes)
+
 	return jcm
+}
+
+// perNUMANodeStats computes per-NUMA-node exclusive/remaining CPU counts.
+func perNUMANodeStats(entries []CPUManagerEntry, nodes []NUMANodeInfo) []jsonCPUManagerNUMANode {
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	exclusiveSet := make(map[int]bool)
+	for _, e := range entries {
+		for _, cpu := range e.CPUs {
+			exclusiveSet[cpu] = true
+		}
+	}
+
+	stats := make([]jsonCPUManagerNUMANode, len(nodes))
+	for i, n := range nodes {
+		exclusive := 0
+		for _, cpu := range n.CPUs {
+			if exclusiveSet[cpu] {
+				exclusive++
+			}
+		}
+		stats[i] = jsonCPUManagerNUMANode{
+			NodeID:        n.ID,
+			ExclusiveCPUs: exclusive,
+			RemainingCPUs: len(n.CPUs) - exclusive,
+			TotalCPUs:     len(n.CPUs),
+		}
+	}
+	return stats
 }
