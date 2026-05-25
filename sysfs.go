@@ -141,6 +141,8 @@ func getAllowedGPUs(fs FileSystem, pid int, gpus []GPUDevice) ([]string, error) 
 // readNodeMemInfo reads per-NUMA-node memory from sysfs.
 // Format: lines like "Node 0 MemTotal:      131072000 kB".
 // Returns total and free in bytes. Returns 0 for fields not present in the file.
+// If a field's value is malformed, it is logged via slog.Debug and treated as 0;
+// successfully parsed fields are still returned so the caller can render partial data.
 func readNodeMemInfo(fs FileSystem, nodeID int) (total, free int64, err error) {
 	path := fmt.Sprintf("/sys/devices/system/node/node%d/meminfo", nodeID)
 	data, err := fs.ReadFile(path)
@@ -158,13 +160,15 @@ func readNodeMemInfo(fs FileSystem, nodeID int) (total, free int64, err error) {
 		case "MemTotal":
 			kb, perr := strconv.ParseInt(fields[3], 10, 64)
 			if perr != nil {
-				return 0, 0, fmt.Errorf("parsing MemTotal for node %d: %w", nodeID, perr)
+				slog.Debug("parsing MemTotal", "node", nodeID, "value", fields[3], "err", perr)
+				continue
 			}
 			total = kb * 1024
 		case "MemFree":
 			kb, perr := strconv.ParseInt(fields[3], 10, 64)
 			if perr != nil {
-				return 0, 0, fmt.Errorf("parsing MemFree for node %d: %w", nodeID, perr)
+				slog.Debug("parsing MemFree", "node", nodeID, "value", fields[3], "err", perr)
+				continue
 			}
 			free = kb * 1024
 		}

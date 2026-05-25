@@ -564,12 +564,22 @@ Node 0 Active:         50000000 kB
 			wantErr: true,
 		},
 		{
-			name: "malformed value",
+			name: "malformed MemTotal keeps MemFree",
 			files: map[string]string{
-				"/sys/devices/system/node/node0/meminfo": "Node 0 MemTotal:     not-a-number kB\n",
+				"/sys/devices/system/node/node0/meminfo": "Node 0 MemTotal:     not-a-number kB\nNode 0 MemFree:      8000000 kB\n",
 			},
-			nodeID:  0,
-			wantErr: true,
+			nodeID:    0,
+			wantTotal: 0,
+			wantFree:  8000000 * 1024,
+		},
+		{
+			name: "malformed MemFree keeps MemTotal",
+			files: map[string]string{
+				"/sys/devices/system/node/node0/meminfo": "Node 0 MemTotal:     131072000 kB\nNode 0 MemFree:      not-a-number kB\n",
+			},
+			nodeID:    0,
+			wantTotal: 131072000 * 1024,
+			wantFree:  0,
 		},
 	}
 
