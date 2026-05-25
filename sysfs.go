@@ -172,6 +172,58 @@ func readNodeMemInfo(fs FileSystem, nodeID int) (total, free int64, err error) {
 	return total, free, nil
 }
 
+// readProcessNUMAMemory aggregates per-NUMA-node memory for a process by parsing
+// /proc/<pid>/numa_maps. Returns a map of NUMA node ID → bytes resident on that node.
+// Lines without kernelpagesize_kB are skipped (cannot determine byte count).
+func readProcessNUMAMemory(fs FileSystem, pid int) (map[int]int64, error) {
+	data, err := fs.ReadFile(fmt.Sprintf("/proc/%d/numa_maps", pid))
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[int]int64)
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		pageSizeKB := int64(0)
+		var nodePages []struct {
+			node  int
+			pages int64
+		}
+		for _, f := range fields {
+			if val, ok := strings.CutPrefix(f, "kernelpagesize_kB="); ok {
+				if v, err := strconv.ParseInt(val, 10, 64); err == nil {
+					pageSizeKB = v
+				}
+				continue
+			}
+			if val, ok := strings.CutPrefix(f, "N"); ok {
+				eq := strings.IndexByte(val, '=')
+				if eq <= 0 {
+					continue
+				}
+				nodeID, err1 := strconv.Atoi(val[:eq])
+				pages, err2 := strconv.ParseInt(val[eq+1:], 10, 64)
+				if err1 != nil || err2 != nil {
+					continue
+				}
+				nodePages = append(nodePages, struct {
+					node  int
+					pages int64
+				}{nodeID, pages})
+			}
+		}
+		if pageSizeKB == 0 {
+			continue
+		}
+		for _, np := range nodePages {
+			result[np.node] += np.pages * pageSizeKB * 1024
+		}
+	}
+	return result, nil
+}
+
 // resolveGPUIDs converts NVIDIA_VISIBLE_DEVICES values to UUIDs.
 // The values can be either UUIDs (GPU-xxxx) or numeric indices (0,1,2).
 func resolveGPUIDs(ids []string, gpus []GPUDevice) []string {
