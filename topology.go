@@ -32,7 +32,14 @@ func buildNUMANodes(fs FileSystem, numaMap map[int]int, gpus []GPUDevice) []NUMA
 				socketID = info.PhysicalID
 			}
 		}
-		nodes = append(nodes, NUMANodeInfo{ID: id, SocketID: socketID, CPUs: cpus, GPUs: nodeGPUs[id]})
+		total, free, err := readNodeMemInfo(fs, id)
+		if err != nil {
+			slog.Debug("could not read NUMA node memory", "node", id, "error", err)
+		}
+		nodes = append(nodes, NUMANodeInfo{
+			ID: id, SocketID: socketID, CPUs: cpus, GPUs: nodeGPUs[id],
+			MemTotalBytes: total, MemFreeBytes: free,
+		})
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	return nodes

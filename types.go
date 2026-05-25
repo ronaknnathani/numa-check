@@ -54,10 +54,12 @@ type GPUDevice struct {
 
 // NUMANodeInfo groups CPUs and GPUs belonging to a NUMA node.
 type NUMANodeInfo struct {
-	ID       int
-	SocketID int
-	CPUs     []int
-	GPUs     []GPUDevice
+	ID            int
+	SocketID      int
+	CPUs          []int
+	GPUs          []GPUDevice
+	MemTotalBytes int64
+	MemFreeBytes  int64
 }
 
 // Types for crictl JSON output.

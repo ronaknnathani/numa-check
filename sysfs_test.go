@@ -517,6 +517,82 @@ func TestGetAllowedGPUs(t *testing.T) {
 	}
 }
 
+func TestReadNodeMemInfo(t *testing.T) {
+	tests := []struct {
+		name      string
+		files     map[string]string
+		nodeID    int
+		wantTotal int64
+		wantFree  int64
+		wantErr   bool
+	}{
+		{
+			name: "valid meminfo",
+			files: map[string]string{
+				"/sys/devices/system/node/node0/meminfo": `Node 0 MemTotal:      131072000 kB
+Node 0 MemFree:        12345000 kB
+Node 0 MemUsed:       118727000 kB
+Node 0 Active:         50000000 kB
+`,
+			},
+			nodeID:    0,
+			wantTotal: 131072000 * 1024,
+			wantFree:  12345000 * 1024,
+		},
+		{
+			name: "extra whitespace",
+			files: map[string]string{
+				"/sys/devices/system/node/node1/meminfo": "Node 1 MemTotal:     131072000 kB\nNode 1 MemFree:      8000000 kB\n",
+			},
+			nodeID:    1,
+			wantTotal: 131072000 * 1024,
+			wantFree:  8000000 * 1024,
+		},
+		{
+			name: "missing MemFree line",
+			files: map[string]string{
+				"/sys/devices/system/node/node0/meminfo": "Node 0 MemTotal:     131072000 kB\n",
+			},
+			nodeID:    0,
+			wantTotal: 131072000 * 1024,
+			wantFree:  0,
+		},
+		{
+			name:    "file missing",
+			files:   map[string]string{},
+			nodeID:  0,
+			wantErr: true,
+		},
+		{
+			name: "malformed value",
+			files: map[string]string{
+				"/sys/devices/system/node/node0/meminfo": "Node 0 MemTotal:     not-a-number kB\n",
+			},
+			nodeID:  0,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := &mockFS{files: tt.files}
+			total, free, err := readNodeMemInfo(fs, tt.nodeID)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if total != tt.wantTotal {
+				t.Errorf("total = %d, want %d", total, tt.wantTotal)
+			}
+			if free != tt.wantFree {
+				t.Errorf("free = %d, want %d", free, tt.wantFree)
+			}
+		})
+	}
+}
+
 func TestResolveGPUIDs(t *testing.T) {
 	gpus := []GPUDevice{
 		{Index: 0, UUID: "GPU-aaa", PCIID: "0000:3b:00.0"},

@@ -138,6 +138,40 @@ func getAllowedGPUs(fs FileSystem, pid int, gpus []GPUDevice) ([]string, error) 
 	return nil, nil
 }
 
+// readNodeMemInfo reads per-NUMA-node memory from sysfs.
+// Format: lines like "Node 0 MemTotal:      131072000 kB".
+// Returns total and free in bytes. Returns 0 for fields not present in the file.
+func readNodeMemInfo(fs FileSystem, nodeID int) (total, free int64, err error) {
+	path := fmt.Sprintf("/sys/devices/system/node/node%d/meminfo", nodeID)
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		// Expect: "Node", "<id>", "<key>:", "<value>", "kB"
+		if len(fields) < 4 || fields[0] != "Node" {
+			continue
+		}
+		key := strings.TrimSuffix(fields[2], ":")
+		switch key {
+		case "MemTotal":
+			kb, perr := strconv.ParseInt(fields[3], 10, 64)
+			if perr != nil {
+				return 0, 0, fmt.Errorf("parsing MemTotal for node %d: %w", nodeID, perr)
+			}
+			total = kb * 1024
+		case "MemFree":
+			kb, perr := strconv.ParseInt(fields[3], 10, 64)
+			if perr != nil {
+				return 0, 0, fmt.Errorf("parsing MemFree for node %d: %w", nodeID, perr)
+			}
+			free = kb * 1024
+		}
+	}
+	return total, free, nil
+}
+
 // resolveGPUIDs converts NVIDIA_VISIBLE_DEVICES values to UUIDs.
 // The values can be either UUIDs (GPU-xxxx) or numeric indices (0,1,2).
 func resolveGPUIDs(ids []string, gpus []GPUDevice) []string {
