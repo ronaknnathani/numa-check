@@ -517,6 +517,177 @@ func TestGetAllowedGPUs(t *testing.T) {
 	}
 }
 
+func TestReadNodeMemInfo(t *testing.T) {
+	tests := []struct {
+		name      string
+		files     map[string]string
+		nodeID    int
+		wantTotal int64
+		wantFree  int64
+		wantErr   bool
+	}{
+		{
+			name: "valid meminfo",
+			files: map[string]string{
+				"/sys/devices/system/node/node0/meminfo": `Node 0 MemTotal:      131072000 kB
+Node 0 MemFree:        12345000 kB
+Node 0 MemUsed:       118727000 kB
+Node 0 Active:         50000000 kB
+`,
+			},
+			nodeID:    0,
+			wantTotal: 131072000 * 1024,
+			wantFree:  12345000 * 1024,
+		},
+		{
+			name: "extra whitespace",
+			files: map[string]string{
+				"/sys/devices/system/node/node1/meminfo": "Node 1 MemTotal:     131072000 kB\nNode 1 MemFree:      8000000 kB\n",
+			},
+			nodeID:    1,
+			wantTotal: 131072000 * 1024,
+			wantFree:  8000000 * 1024,
+		},
+		{
+			name: "missing MemFree line",
+			files: map[string]string{
+				"/sys/devices/system/node/node0/meminfo": "Node 0 MemTotal:     131072000 kB\n",
+			},
+			nodeID:    0,
+			wantTotal: 131072000 * 1024,
+			wantFree:  0,
+		},
+		{
+			name:    "file missing",
+			files:   map[string]string{},
+			nodeID:  0,
+			wantErr: true,
+		},
+		{
+			name: "malformed MemTotal keeps MemFree",
+			files: map[string]string{
+				"/sys/devices/system/node/node0/meminfo": "Node 0 MemTotal:     not-a-number kB\nNode 0 MemFree:      8000000 kB\n",
+			},
+			nodeID:    0,
+			wantTotal: 0,
+			wantFree:  8000000 * 1024,
+		},
+		{
+			name: "malformed MemFree keeps MemTotal",
+			files: map[string]string{
+				"/sys/devices/system/node/node0/meminfo": "Node 0 MemTotal:     131072000 kB\nNode 0 MemFree:      not-a-number kB\n",
+			},
+			nodeID:    0,
+			wantTotal: 131072000 * 1024,
+			wantFree:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := &mockFS{files: tt.files}
+			total, free, err := readNodeMemInfo(fs, tt.nodeID)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if total != tt.wantTotal {
+				t.Errorf("total = %d, want %d", total, tt.wantTotal)
+			}
+			if free != tt.wantFree {
+				t.Errorf("free = %d, want %d", free, tt.wantFree)
+			}
+		})
+	}
+}
+
+func TestReadProcessNUMAMemory(t *testing.T) {
+	tests := []struct {
+		name    string
+		files   map[string]string
+		pid     int
+		want    map[int]int64
+		wantErr bool
+	}{
+		{
+			name: "single VMA single node",
+			files: map[string]string{
+				"/proc/1234/numa_maps": "7f0000000000 default anon=10 N0=10 kernelpagesize_kB=4\n",
+			},
+			pid:  1234,
+			want: map[int]int64{0: 10 * 4 * 1024},
+		},
+		{
+			name: "multiple VMAs across nodes",
+			files: map[string]string{
+				"/proc/1234/numa_maps": `7f0000000000 default anon=100 N0=80 N1=20 kernelpagesize_kB=4
+7f0000100000 default anon=50 N1=50 kernelpagesize_kB=4
+7f0000200000 default file=/lib/libc.so mapped=200 N0=200 kernelpagesize_kB=4
+`,
+			},
+			pid: 1234,
+			want: map[int]int64{
+				0: (80 + 200) * 4 * 1024,
+				1: (20 + 50) * 4 * 1024,
+			},
+		},
+		{
+			name: "huge pages mixed with regular",
+			files: map[string]string{
+				"/proc/1234/numa_maps": `7f0000000000 default anon=10 N0=10 kernelpagesize_kB=4
+7f1000000000 default huge anon=2 N0=2 kernelpagesize_kB=2048
+`,
+			},
+			pid: 1234,
+			want: map[int]int64{
+				0: 10*4*1024 + 2*2048*1024,
+			},
+		},
+		{
+			name: "skip lines without kernelpagesize_kB",
+			files: map[string]string{
+				"/proc/1234/numa_maps": `7f0000000000 default anon=10 N0=10
+7f0000100000 default anon=20 N0=20 kernelpagesize_kB=4
+`,
+			},
+			pid:  1234,
+			want: map[int]int64{0: 20 * 4 * 1024},
+		},
+		{
+			name: "empty file",
+			files: map[string]string{
+				"/proc/1234/numa_maps": "",
+			},
+			pid:  1234,
+			want: map[int]int64{},
+		},
+		{
+			name:    "file missing",
+			files:   map[string]string{},
+			pid:     1234,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := &mockFS{files: tt.files}
+			got, err := readProcessNUMAMemory(fs, tt.pid)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveGPUIDs(t *testing.T) {
 	gpus := []GPUDevice{
 		{Index: 0, UUID: "GPU-aaa", PCIID: "0000:3b:00.0"},

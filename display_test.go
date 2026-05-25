@@ -1,9 +1,35 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
+
+// captureStdout runs fn while redirecting os.Stdout to a pipe and returns the captured output.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
+	done := make(chan string)
+	go func() {
+		var sb strings.Builder
+		_, _ = io.Copy(&sb, r)
+		done <- sb.String()
+	}()
+
+	fn()
+	_ = w.Close()
+	return <-done
+}
 
 func TestNodeHeader(t *testing.T) {
 	tests := []struct {
@@ -95,6 +121,62 @@ func TestCPUFooter(t *testing.T) {
 			got := cpuFooter(&tt.node, tt.mode, tt.allowedSet)
 			if got != tt.want {
 				t.Errorf("cpuFooter() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMemoryFooter(t *testing.T) {
+	useColor = false
+	t.Cleanup(func() { useColor = false })
+
+	tests := []struct {
+		name       string
+		node       NUMANodeInfo
+		mode       DisplayMode
+		processMem map[int]int64
+		want       string
+	}{
+		{
+			name: "machine mode with memory",
+			node: NUMANodeInfo{ID: 0, MemTotalBytes: 256 * 1024 * 1024 * 1024, MemFreeBytes: 240 * 1024 * 1024 * 1024},
+			mode: ModeMachine,
+			want: "256.0 GiB total, 240.0 GiB free",
+		},
+		{
+			name: "machine mode with unknown memory",
+			node: NUMANodeInfo{ID: 0, MemTotalBytes: 0},
+			mode: ModeMachine,
+			want: "memory: unknown",
+		},
+		{
+			name:       "process mode with per-node memory",
+			node:       NUMANodeInfo{ID: 0, MemTotalBytes: 256 * 1024 * 1024 * 1024},
+			mode:       ModeProcess,
+			processMem: map[int]int64{0: 1536 * 1024 * 1024},
+			want:       "1.5 GiB on this node / 256.0 GiB",
+		},
+		{
+			name:       "process mode with zero usage on node",
+			node:       NUMANodeInfo{ID: 1, MemTotalBytes: 256 * 1024 * 1024 * 1024},
+			mode:       ModeProcess,
+			processMem: map[int]int64{0: 1536 * 1024 * 1024},
+			want:       "0 B on this node / 256.0 GiB",
+		},
+		{
+			name:       "process mode with no process-mem data",
+			node:       NUMANodeInfo{ID: 0, MemTotalBytes: 256 * 1024 * 1024 * 1024},
+			mode:       ModeProcess,
+			processMem: nil,
+			want:       "256.0 GiB total",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := memoryFooter(&tt.node, tt.mode, tt.processMem)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -386,6 +468,83 @@ func TestRenderGPURows(t *testing.T) {
 		rows, _ := renderGPURows(gpus, ModeMachine, 0, nil, nil)
 		if len(rows) != 2 {
 			t.Fatalf("expected 2 rows for 3 GPUs, got %d", len(rows))
+		}
+	})
+}
+
+func TestJSONTopoOutputContainsMemory(t *testing.T) {
+	out := jsonTopoOutput{
+		TotalCPUs:        4,
+		PhysicalCores:    2,
+		Sockets:          1,
+		TotalMemoryBytes: 8 * 1024 * 1024 * 1024,
+		NUMANodes: []jsonNUMANode{
+			{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, MemTotalBytes: 8 * 1024 * 1024 * 1024, MemFreeBytes: 4 * 1024 * 1024 * 1024},
+		},
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(data)
+	for _, want := range []string{`"mem_total_bytes"`, `"mem_free_bytes"`, `"total_memory_bytes"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("JSON missing %s: %s", want, s)
+		}
+	}
+}
+
+func TestPrintNodesGridIncludesMemoryFooter(t *testing.T) {
+	useColor = false
+	t.Cleanup(func() { useColor = false })
+
+	nodes := []NUMANodeInfo{
+		{
+			ID:            0,
+			SocketID:      0,
+			CPUs:          []int{0, 1, 2, 3},
+			MemTotalBytes: 256 * 1024 * 1024 * 1024,
+			MemFreeBytes:  240 * 1024 * 1024 * 1024,
+		},
+		{
+			ID:            1,
+			SocketID:      1,
+			CPUs:          []int{4, 5, 6, 7},
+			MemTotalBytes: 128 * 1024 * 1024 * 1024,
+			MemFreeBytes:  100 * 1024 * 1024 * 1024,
+		},
+	}
+
+	t.Run("machine mode shows total and free", func(t *testing.T) {
+		out := captureStdout(t, func() {
+			printNodesGrid(nodes, ModeMachine, nil, -1, nil, nil, nil)
+		})
+		for _, want := range []string{
+			"256.0 GiB total, 240.0 GiB free",
+			"128.0 GiB total, 100.0 GiB free",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("output missing %q\n--- output ---\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("process mode shows per-node usage", func(t *testing.T) {
+		processMem := map[int]int64{
+			0: 4 * 1024 * 1024 * 1024,
+			1: 1536 * 1024 * 1024,
+		}
+		allowed := map[int]bool{0: true, 1: true, 4: true}
+		out := captureStdout(t, func() {
+			printNodesGrid(nodes, ModeProcess, allowed, 0, map[int]bool{0: true}, nil, processMem)
+		})
+		for _, want := range []string{
+			"4.0 GiB on this node / 256.0 GiB",
+			"1.5 GiB on this node / 128.0 GiB",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("output missing %q\n--- output ---\n%s", want, out)
+			}
 		}
 	})
 }

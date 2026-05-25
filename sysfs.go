@@ -138,6 +138,88 @@ func getAllowedGPUs(fs FileSystem, pid int, gpus []GPUDevice) ([]string, error) 
 	return nil, nil
 }
 
+// readNodeMemInfo reads per-NUMA-node memory from sysfs.
+// Format: lines like "Node 0 MemTotal:      131072000 kB".
+// Returns total and free in bytes. Returns 0 for fields not present in the file.
+// If a field's value is malformed, it is logged via slog.Debug and treated as 0;
+// successfully parsed fields are still returned so the caller can render partial data.
+func readNodeMemInfo(fs FileSystem, nodeID int) (total, free int64, err error) {
+	path := fmt.Sprintf("/sys/devices/system/node/node%d/meminfo", nodeID)
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		// Expect: "Node", "<id>", "<key>:", "<value>", "kB"
+		if len(fields) < 4 || fields[0] != "Node" {
+			continue
+		}
+		key := strings.TrimSuffix(fields[2], ":")
+		switch key {
+		case "MemTotal":
+			kb, perr := strconv.ParseInt(fields[3], 10, 64)
+			if perr != nil {
+				slog.Debug("parsing MemTotal", "node", nodeID, "value", fields[3], "err", perr)
+				continue
+			}
+			total = kb * 1024
+		case "MemFree":
+			kb, perr := strconv.ParseInt(fields[3], 10, 64)
+			if perr != nil {
+				slog.Debug("parsing MemFree", "node", nodeID, "value", fields[3], "err", perr)
+				continue
+			}
+			free = kb * 1024
+		}
+	}
+	return total, free, nil
+}
+
+// readProcessNUMAMemory aggregates per-NUMA-node memory for a process by parsing
+// /proc/<pid>/numa_maps. Returns a map of NUMA node ID → bytes resident on that node.
+// Lines without kernelpagesize_kB are skipped (cannot determine byte count).
+func readProcessNUMAMemory(fs FileSystem, pid int) (map[int]int64, error) {
+	data, err := fs.ReadFile(fmt.Sprintf("/proc/%d/numa_maps", pid))
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[int]int64)
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+
+		// First find kernelpagesize_kB; without it we can't convert pages to bytes.
+		var pageSizeKB int64
+		for _, f := range fields {
+			if val, ok := strings.CutPrefix(f, "kernelpagesize_kB="); ok {
+				pageSizeKB, _ = strconv.ParseInt(val, 10, 64)
+				break
+			}
+		}
+		if pageSizeKB == 0 {
+			continue
+		}
+
+		// Then accumulate per-node page counts from "N<id>=<pages>" entries.
+		for _, f := range fields {
+			if len(f) < 3 || f[0] != 'N' {
+				continue
+			}
+			eq := strings.IndexByte(f, '=')
+			if eq <= 1 {
+				continue
+			}
+			nodeID, err1 := strconv.Atoi(f[1:eq])
+			pages, err2 := strconv.ParseInt(f[eq+1:], 10, 64)
+			if err1 != nil || err2 != nil {
+				continue
+			}
+			result[nodeID] += pages * pageSizeKB * 1024
+		}
+	}
+	return result, nil
+}
+
 // resolveGPUIDs converts NVIDIA_VISIBLE_DEVICES values to UUIDs.
 // The values can be either UUIDs (GPU-xxxx) or numeric indices (0,1,2).
 func resolveGPUIDs(ids []string, gpus []GPUDevice) []string {

@@ -37,6 +37,8 @@ func TestBuildNUMANodesWithFS(t *testing.T) {
 				"/sys/devices/system/cpu/cpu2/topology/core_id":             "0",
 				"/sys/devices/system/cpu/cpu3/topology/physical_package_id": "1",
 				"/sys/devices/system/cpu/cpu3/topology/core_id":             "1",
+				"/sys/devices/system/node/node0/meminfo":                    "Node 0 MemTotal:     65536 kB\nNode 0 MemFree:      32768 kB\n",
+				"/sys/devices/system/node/node1/meminfo":                    "Node 1 MemTotal:     65536 kB\nNode 1 MemFree:      16384 kB\n",
 			},
 		}
 		numaMap := map[int]int{0: 0, 1: 0, 2: 1, 3: 1}
@@ -63,6 +65,15 @@ func TestBuildNUMANodesWithFS(t *testing.T) {
 		}
 		if nodes[1].SocketID != 1 {
 			t.Errorf("node 1 SocketID = %d, want 1", nodes[1].SocketID)
+		}
+		if nodes[0].MemTotalBytes != 65536*1024 {
+			t.Errorf("node 0 MemTotalBytes = %d, want %d", nodes[0].MemTotalBytes, 65536*1024)
+		}
+		if nodes[0].MemFreeBytes != 32768*1024 {
+			t.Errorf("node 0 MemFreeBytes = %d, want %d", nodes[0].MemFreeBytes, 32768*1024)
+		}
+		if nodes[1].MemTotalBytes != 65536*1024 {
+			t.Errorf("node 1 MemTotalBytes = %d, want %d", nodes[1].MemTotalBytes, 65536*1024)
 		}
 	})
 
