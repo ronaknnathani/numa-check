@@ -164,16 +164,16 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 		}
 	}
 
+	totalMem := sumNodeMemTotals(nodes)
+
 	if jsonOut {
 		out := jsonTopoOutput{
-			TotalCPUs:     len(numaMap),
-			PhysicalCores: len(allCores),
-			Sockets:       len(totalSockets),
-			NUMANodes:     toJSONNodes(nodes, nil),
-			GPUs:          toJSONGPUs(gpus),
-		}
-		for _, n := range nodes {
-			out.TotalMemoryBytes += n.MemTotalBytes
+			TotalCPUs:        len(numaMap),
+			PhysicalCores:    len(allCores),
+			Sockets:          len(totalSockets),
+			TotalMemoryBytes: totalMem,
+			NUMANodes:        toJSONNodes(nodes, nil),
+			GPUs:             toJSONGPUs(gpus),
 		}
 		if cpuMgrState != nil {
 			out.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
@@ -185,10 +185,6 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 	fmt.Printf("\n%s\n\n", col(ansiBold, "numa-check — Machine Topology"))
 	printSection("Topology")
 
-	var totalMem int64
-	for _, n := range nodes {
-		totalMem += n.MemTotalBytes
-	}
 	summary := fmt.Sprintf("  %d CPUs (%d physical cores), %d NUMA nodes, %d sockets",
 		len(numaMap), len(allCores), len(nodes), len(totalSockets))
 	if totalMem > 0 {
@@ -289,22 +285,16 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 	if jsonOut {
 		pinned := systemCPUErr == nil && len(affinityList) < systemCPUs
 		out := jsonProcessOutput{
-			PID:         pid,
-			AllowedCPUs: affinityList,
-			Pinned:      pinned,
-			CurrentCPU:  currentCPU,
-			CurrentNUMA: cpuNUMANode,
-			NUMANodes:   toJSONNodes(nodes, processMem),
-			GPUs:        toJSONGPUs(gpus),
-			AllowedGPUs: mapKeys(allowedGPUs),
-		}
-		for _, n := range nodes {
-			out.TotalMemoryBytes += n.MemTotalBytes
-		}
-		if processMem != nil {
-			for _, b := range processMem {
-				out.ProcessMemoryBytes += b
-			}
+			PID:                pid,
+			AllowedCPUs:        affinityList,
+			Pinned:             pinned,
+			CurrentCPU:         currentCPU,
+			CurrentNUMA:        cpuNUMANode,
+			TotalMemoryBytes:   sumNodeMemTotals(nodes),
+			ProcessMemoryBytes: sumProcessMem(processMem),
+			NUMANodes:          toJSONNodes(nodes, processMem),
+			GPUs:               toJSONGPUs(gpus),
+			AllowedGPUs:        mapKeys(allowedGPUs),
 		}
 		if systemCPUErr == nil {
 			out.SystemCPUs = systemCPUs
@@ -342,14 +332,8 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 	fmt.Printf("  Currently on ......... CPU %d → NUMA Node %d\n", currentCPU, cpuNUMANode)
 
 	if processMem != nil {
-		var totalProc int64
-		for _, b := range processMem {
-			totalProc += b
-		}
-		var totalNode int64
-		for _, n := range nodes {
-			totalNode += n.MemTotalBytes
-		}
+		totalProc := sumProcessMem(processMem)
+		totalNode := sumNodeMemTotals(nodes)
 		if totalNode > 0 {
 			fmt.Printf("  Memory ............... %s used / %s total\n", formatBytes(totalProc), formatBytes(totalNode))
 		} else {
@@ -408,6 +392,25 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 	}
 
 	fmt.Println()
+}
+
+// sumNodeMemTotals returns the sum of MemTotalBytes across nodes.
+func sumNodeMemTotals(nodes []NUMANodeInfo) int64 {
+	var total int64
+	for _, n := range nodes {
+		total += n.MemTotalBytes
+	}
+	return total
+}
+
+// sumProcessMem returns the sum of bytes across all NUMA nodes in processMem.
+// A nil map sums to 0.
+func sumProcessMem(processMem map[int]int64) int64 {
+	var total int64
+	for _, b := range processMem {
+		total += b
+	}
+	return total
 }
 
 func toJSONNodes(nodes []NUMANodeInfo, processMem map[int]int64) []jsonNUMANode {

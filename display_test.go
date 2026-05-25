@@ -106,11 +106,11 @@ func TestMemoryFooter(t *testing.T) {
 	t.Cleanup(func() { useColor = false })
 
 	tests := []struct {
-		name        string
-		node        NUMANodeInfo
-		mode        DisplayMode
-		processMem  map[int]int64
-		want        string
+		name       string
+		node       NUMANodeInfo
+		mode       DisplayMode
+		processMem map[int]int64
+		want       string
 	}{
 		{
 			name: "machine mode with memory",

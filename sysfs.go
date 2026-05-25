@@ -182,43 +182,35 @@ func readProcessNUMAMemory(fs FileSystem, pid int) (map[int]int64, error) {
 	}
 	result := make(map[int]int64)
 	for _, line := range strings.Split(string(data), "\n") {
-		if line == "" {
-			continue
-		}
 		fields := strings.Fields(line)
-		pageSizeKB := int64(0)
-		var nodePages []struct {
-			node  int
-			pages int64
-		}
+
+		// First find kernelpagesize_kB; without it we can't convert pages to bytes.
+		var pageSizeKB int64
 		for _, f := range fields {
 			if val, ok := strings.CutPrefix(f, "kernelpagesize_kB="); ok {
-				if v, err := strconv.ParseInt(val, 10, 64); err == nil {
-					pageSizeKB = v
-				}
-				continue
-			}
-			if val, ok := strings.CutPrefix(f, "N"); ok {
-				eq := strings.IndexByte(val, '=')
-				if eq <= 0 {
-					continue
-				}
-				nodeID, err1 := strconv.Atoi(val[:eq])
-				pages, err2 := strconv.ParseInt(val[eq+1:], 10, 64)
-				if err1 != nil || err2 != nil {
-					continue
-				}
-				nodePages = append(nodePages, struct {
-					node  int
-					pages int64
-				}{nodeID, pages})
+				pageSizeKB, _ = strconv.ParseInt(val, 10, 64)
+				break
 			}
 		}
 		if pageSizeKB == 0 {
 			continue
 		}
-		for _, np := range nodePages {
-			result[np.node] += np.pages * pageSizeKB * 1024
+
+		// Then accumulate per-node page counts from "N<id>=<pages>" entries.
+		for _, f := range fields {
+			if len(f) < 3 || f[0] != 'N' {
+				continue
+			}
+			eq := strings.IndexByte(f, '=')
+			if eq <= 1 {
+				continue
+			}
+			nodeID, err1 := strconv.Atoi(f[1:eq])
+			pages, err2 := strconv.ParseInt(f[eq+1:], 10, 64)
+			if err1 != nil || err2 != nil {
+				continue
+			}
+			result[nodeID] += pages * pageSizeKB * 1024
 		}
 	}
 	return result, nil
