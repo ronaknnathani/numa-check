@@ -126,33 +126,39 @@ type CPUManagerEntry struct {
 // JSON output types.
 
 type jsonTopoOutput struct {
-	TotalCPUs     int            `json:"total_cpus"`
-	PhysicalCores int            `json:"physical_cores"`
-	Sockets       int            `json:"sockets"`
-	NUMANodes     []jsonNUMANode  `json:"numa_nodes"`
-	GPUs          []jsonGPU       `json:"gpus,omitempty"`
-	CPUManager    *jsonCPUManager `json:"cpu_manager,omitempty"`
+	TotalCPUs       int             `json:"total_cpus"`
+	PhysicalCores   int             `json:"physical_cores"`
+	Sockets         int             `json:"sockets"`
+	TotalMemoryBytes int64          `json:"total_memory_bytes,omitempty"`
+	NUMANodes       []jsonNUMANode  `json:"numa_nodes"`
+	GPUs            []jsonGPU       `json:"gpus,omitempty"`
+	CPUManager      *jsonCPUManager `json:"cpu_manager,omitempty"`
 }
 
 type jsonProcessOutput struct {
-	PID          int              `json:"pid"`
-	AllowedCPUs  []int            `json:"allowed_cpus"`
-	SystemCPUs   int              `json:"system_cpus,omitempty"`
-	Pinned       bool             `json:"pinned"`
-	CurrentCPU   int              `json:"current_cpu"`
-	CurrentNUMA  int              `json:"current_numa_node"`
-	NUMANodes    []jsonNUMANode   `json:"numa_nodes"`
-	GPUs         []jsonGPU        `json:"gpus,omitempty"`
-	AllowedGPUs  []string         `json:"allowed_gpus,omitempty"`
-	Resources    *jsonResources   `json:"container_resources,omitempty"`
-	Numastat     string           `json:"numastat,omitempty"`
-	CPUManager   *jsonCPUManager  `json:"cpu_manager,omitempty"`
+	PID                int              `json:"pid"`
+	AllowedCPUs        []int            `json:"allowed_cpus"`
+	SystemCPUs         int              `json:"system_cpus,omitempty"`
+	Pinned             bool             `json:"pinned"`
+	CurrentCPU         int              `json:"current_cpu"`
+	CurrentNUMA        int              `json:"current_numa_node"`
+	TotalMemoryBytes   int64            `json:"total_memory_bytes,omitempty"`
+	ProcessMemoryBytes int64            `json:"process_memory_bytes,omitempty"`
+	NUMANodes          []jsonNUMANode   `json:"numa_nodes"`
+	GPUs               []jsonGPU        `json:"gpus,omitempty"`
+	AllowedGPUs        []string         `json:"allowed_gpus,omitempty"`
+	Resources          *jsonResources   `json:"container_resources,omitempty"`
+	Numastat           string           `json:"numastat,omitempty"`
+	CPUManager         *jsonCPUManager  `json:"cpu_manager,omitempty"`
 }
 
 type jsonNUMANode struct {
-	ID       int   `json:"id"`
-	SocketID int   `json:"socket_id"`
-	CPUs     []int `json:"cpus"`
+	ID            int   `json:"id"`
+	SocketID      int   `json:"socket_id"`
+	CPUs          []int `json:"cpus"`
+	MemTotalBytes int64 `json:"mem_total_bytes,omitempty"`
+	MemFreeBytes  int64 `json:"mem_free_bytes,omitempty"`
+	ProcessMemBytes int64 `json:"process_mem_bytes,omitempty"`
 }
 
 type jsonGPU struct {

@@ -169,8 +169,11 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 			TotalCPUs:     len(numaMap),
 			PhysicalCores: len(allCores),
 			Sockets:       len(totalSockets),
-			NUMANodes:     toJSONNodes(nodes),
+			NUMANodes:     toJSONNodes(nodes, nil),
 			GPUs:          toJSONGPUs(gpus),
+		}
+		for _, n := range nodes {
+			out.TotalMemoryBytes += n.MemTotalBytes
 		}
 		if cpuMgrState != nil {
 			out.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
@@ -182,8 +185,15 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 	fmt.Printf("\n%s\n\n", col(ansiBold, "numa-check — Machine Topology"))
 	printSection("Topology")
 
+	var totalMem int64
+	for _, n := range nodes {
+		totalMem += n.MemTotalBytes
+	}
 	summary := fmt.Sprintf("  %d CPUs (%d physical cores), %d NUMA nodes, %d sockets",
 		len(numaMap), len(allCores), len(nodes), len(totalSockets))
+	if totalMem > 0 {
+		summary += fmt.Sprintf(", %s memory", formatBytes(totalMem))
+	}
 	if len(gpus) > 0 {
 		summary += fmt.Sprintf(", %d GPUs", len(gpus))
 	}
@@ -256,6 +266,12 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 		}
 	}
 
+	processMem, memErr := readProcessNUMAMemory(fs, pid)
+	if memErr != nil {
+		warnf("could not read process NUMA memory: %v", memErr)
+		processMem = nil
+	}
+
 	var cpuMgrState *CPUManagerState
 	var cpuMgrEntries []CPUManagerEntry
 	if cpuManagerPath != "" {
@@ -278,9 +294,17 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 			Pinned:      pinned,
 			CurrentCPU:  currentCPU,
 			CurrentNUMA: cpuNUMANode,
-			NUMANodes:   toJSONNodes(nodes),
+			NUMANodes:   toJSONNodes(nodes, processMem),
 			GPUs:        toJSONGPUs(gpus),
 			AllowedGPUs: mapKeys(allowedGPUs),
+		}
+		for _, n := range nodes {
+			out.TotalMemoryBytes += n.MemTotalBytes
+		}
+		if processMem != nil {
+			for _, b := range processMem {
+				out.ProcessMemoryBytes += b
+			}
 		}
 		if systemCPUErr == nil {
 			out.SystemCPUs = systemCPUs
@@ -317,6 +341,22 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 	}
 	fmt.Printf("  Currently on ......... CPU %d → NUMA Node %d\n", currentCPU, cpuNUMANode)
 
+	if processMem != nil {
+		var totalProc int64
+		for _, b := range processMem {
+			totalProc += b
+		}
+		var totalNode int64
+		for _, n := range nodes {
+			totalNode += n.MemTotalBytes
+		}
+		if totalNode > 0 {
+			fmt.Printf("  Memory ............... %s used / %s total\n", formatBytes(totalProc), formatBytes(totalNode))
+		} else {
+			fmt.Printf("  Memory ............... %s used\n", formatBytes(totalProc))
+		}
+	}
+
 	if len(gpus) > 0 && !gpuEnvErr {
 		if allowedGPUs == nil {
 			fmt.Printf("  Allowed GPUs ......... all %d GPUs\n", len(gpus))
@@ -345,7 +385,7 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 			processGridNodes[i] = NUMANodeInfo{ID: n.ID, SocketID: n.SocketID, CPUs: n.CPUs}
 		}
 	}
-	printNodesGrid(processGridNodes, ModeProcess, allowedSet, currentCPU, processNodes, allowedGPUs, nil)
+	printNodesGrid(processGridNodes, ModeProcess, allowedSet, currentCPU, processNodes, allowedGPUs, processMem)
 
 	if cpuMgrState != nil {
 		fmt.Println()
@@ -370,10 +410,19 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 	fmt.Println()
 }
 
-func toJSONNodes(nodes []NUMANodeInfo) []jsonNUMANode {
+func toJSONNodes(nodes []NUMANodeInfo, processMem map[int]int64) []jsonNUMANode {
 	out := make([]jsonNUMANode, len(nodes))
 	for i, n := range nodes {
-		out[i] = jsonNUMANode{ID: n.ID, SocketID: n.SocketID, CPUs: n.CPUs}
+		out[i] = jsonNUMANode{
+			ID:            n.ID,
+			SocketID:      n.SocketID,
+			CPUs:          n.CPUs,
+			MemTotalBytes: n.MemTotalBytes,
+			MemFreeBytes:  n.MemFreeBytes,
+		}
+		if processMem != nil {
+			out[i].ProcessMemBytes = processMem[n.ID]
+		}
 	}
 	return out
 }

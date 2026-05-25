@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -444,4 +445,26 @@ func TestRenderGPURows(t *testing.T) {
 			t.Fatalf("expected 2 rows for 3 GPUs, got %d", len(rows))
 		}
 	})
+}
+
+func TestJSONTopoOutputContainsMemory(t *testing.T) {
+	out := jsonTopoOutput{
+		TotalCPUs:        4,
+		PhysicalCores:    2,
+		Sockets:          1,
+		TotalMemoryBytes: 8 * 1024 * 1024 * 1024,
+		NUMANodes: []jsonNUMANode{
+			{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, MemTotalBytes: 8 * 1024 * 1024 * 1024, MemFreeBytes: 4 * 1024 * 1024 * 1024},
+		},
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(data)
+	for _, want := range []string{`"mem_total_bytes"`, `"mem_free_bytes"`, `"total_memory_bytes"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("JSON missing %s: %s", want, s)
+		}
+	}
 }
