@@ -100,6 +100,62 @@ func TestCPUFooter(t *testing.T) {
 	}
 }
 
+func TestMemoryFooter(t *testing.T) {
+	useColor = false
+	t.Cleanup(func() { useColor = false })
+
+	tests := []struct {
+		name        string
+		node        NUMANodeInfo
+		mode        DisplayMode
+		processMem  map[int]int64
+		want        string
+	}{
+		{
+			name: "machine mode with memory",
+			node: NUMANodeInfo{ID: 0, MemTotalBytes: 256 * 1024 * 1024 * 1024, MemFreeBytes: 240 * 1024 * 1024 * 1024},
+			mode: ModeMachine,
+			want: "256.0 GiB total, 240.0 GiB free",
+		},
+		{
+			name: "machine mode with unknown memory",
+			node: NUMANodeInfo{ID: 0, MemTotalBytes: 0},
+			mode: ModeMachine,
+			want: "memory: unknown",
+		},
+		{
+			name:       "process mode with per-node memory",
+			node:       NUMANodeInfo{ID: 0, MemTotalBytes: 256 * 1024 * 1024 * 1024},
+			mode:       ModeProcess,
+			processMem: map[int]int64{0: 1536 * 1024 * 1024},
+			want:       "1.5 GiB on this node / 256.0 GiB",
+		},
+		{
+			name:       "process mode with zero usage on node",
+			node:       NUMANodeInfo{ID: 1, MemTotalBytes: 256 * 1024 * 1024 * 1024},
+			mode:       ModeProcess,
+			processMem: map[int]int64{0: 1536 * 1024 * 1024},
+			want:       "0 B on this node / 256.0 GiB",
+		},
+		{
+			name:       "process mode with no process-mem data",
+			node:       NUMANodeInfo{ID: 0, MemTotalBytes: 256 * 1024 * 1024 * 1024},
+			mode:       ModeProcess,
+			processMem: nil,
+			want:       "256.0 GiB total",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := memoryFooter(&tt.node, tt.mode, tt.processMem)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGPUFooter(t *testing.T) {
 	useColor = false
 

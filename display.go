@@ -52,21 +52,21 @@ func printSection(title string) {
 
 const gridCols = 16 // CPUs per row in the topology grid
 
-func printNodesGrid(nodes []NUMANodeInfo, mode DisplayMode, allowedSet map[int]bool, currentCPU int, processNodes map[int]bool, allowedGPUs map[string]bool) {
+func printNodesGrid(nodes []NUMANodeInfo, mode DisplayMode, allowedSet map[int]bool, currentCPU int, processNodes map[int]bool, allowedGPUs map[string]bool, processMem map[int]int64) {
 	for i := 0; i < len(nodes); i += 2 {
 		left := &nodes[i]
 		var right *NUMANodeInfo
 		if i+1 < len(nodes) {
 			right = &nodes[i+1]
 		}
-		printNodePair(left, right, mode, allowedSet, currentCPU, processNodes, allowedGPUs)
+		printNodePair(left, right, mode, allowedSet, currentCPU, processNodes, allowedGPUs, processMem)
 		if i+2 < len(nodes) {
 			fmt.Println()
 		}
 	}
 }
 
-func printNodePair(left, right *NUMANodeInfo, mode DisplayMode, allowedSet map[int]bool, currentCPU int, processNodes map[int]bool, allowedGPUs map[string]bool) {
+func printNodePair(left, right *NUMANodeInfo, mode DisplayMode, allowedSet map[int]bool, currentCPU int, processNodes map[int]bool, allowedGPUs map[string]bool, processMem map[int]int64) {
 	const colWidth = 34
 	const gap = "    "
 
@@ -115,6 +115,15 @@ func printNodePair(left, right *NUMANodeInfo, mode DisplayMode, allowedSet map[i
 		fmt.Printf("  %s%s%s\n", col(ansiDim, pad(lcf, colWidth)), gap, col(ansiDim, rcf))
 	} else {
 		fmt.Printf("  %s\n", col(ansiDim, lcf))
+	}
+
+	// Memory footer.
+	lmf := memoryFooter(left, mode, processMem)
+	if right != nil {
+		rmf := memoryFooter(right, mode, processMem)
+		fmt.Printf("  %s%s%s\n", col(ansiDim, pad(lmf, colWidth)), gap, col(ansiDim, rmf))
+	} else {
+		fmt.Printf("  %s\n", col(ansiDim, lmf))
 	}
 
 	// GPU rows.
@@ -182,6 +191,27 @@ func cpuFooter(n *NUMANodeInfo, mode DisplayMode, allowedSet map[int]bool) strin
 		return fmt.Sprintf("%d of %d CPUs", count, len(n.CPUs))
 	}
 	return fmt.Sprintf("%d CPUs (%d–%d)", len(n.CPUs), n.CPUs[0], n.CPUs[len(n.CPUs)-1])
+}
+
+// memoryFooter returns the memory line shown below the CPU footer.
+// In machine mode: "<total> total, <free> free" or "memory: unknown".
+// In process mode: "<bytes> on this node / <total>", or "<total> total" when processMem is nil.
+func memoryFooter(n *NUMANodeInfo, mode DisplayMode, processMem map[int]int64) string {
+	if n.MemTotalBytes == 0 {
+		return "memory: unknown"
+	}
+	totalStr := formatBytes(n.MemTotalBytes)
+	switch mode {
+	case ModeMachine:
+		return fmt.Sprintf("%s total, %s free", totalStr, formatBytes(n.MemFreeBytes))
+	case ModeProcess:
+		if processMem == nil {
+			return fmt.Sprintf("%s total", totalStr)
+		}
+		used := processMem[n.ID]
+		return fmt.Sprintf("%s on this node / %s", formatBytes(used), totalStr)
+	}
+	return ""
 }
 
 func gpuFooter(n *NUMANodeInfo) string {

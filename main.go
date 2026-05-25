@@ -189,7 +189,7 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 	}
 	fmt.Printf("%s\n\n", summary)
 
-	printNodesGrid(nodes, ModeMachine, nil, -1, nil, nil)
+	printNodesGrid(nodes, ModeMachine, nil, -1, nil, nil, nil)
 
 	if cpuMgrState != nil {
 		fmt.Println()
@@ -345,7 +345,7 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 			processGridNodes[i] = NUMANodeInfo{ID: n.ID, SocketID: n.SocketID, CPUs: n.CPUs}
 		}
 	}
-	printNodesGrid(processGridNodes, ModeProcess, allowedSet, currentCPU, processNodes, allowedGPUs)
+	printNodesGrid(processGridNodes, ModeProcess, allowedSet, currentCPU, processNodes, allowedGPUs, nil)
 
 	if cpuMgrState != nil {
 		fmt.Println()
