@@ -456,12 +456,15 @@ func sumProcessMem(processMem map[int]int64) int64 {
 func toJSONNodes(nodes []NUMANodeInfo) []jsonNUMANode {
 	out := make([]jsonNUMANode, len(nodes))
 	for i, n := range nodes {
-		out[i] = jsonNUMANode{
+		jn := jsonNUMANode{
 			ID:       n.ID,
 			SocketID: n.SocketID,
 			CPUs:     n.CPUs,
-			Memory:   jsonMemory{TotalBytes: n.MemTotalBytes, FreeBytes: n.MemFreeBytes},
 		}
+		if n.MemTotalBytes != 0 || n.MemFreeBytes != 0 {
+			jn.Memory = &jsonMemory{TotalBytes: n.MemTotalBytes, FreeBytes: n.MemFreeBytes}
+		}
+		out[i] = jn
 	}
 	return out
 }
@@ -540,9 +543,11 @@ func buildMachine(fs FileSystem, numaMap map[int]int, nodes []NUMANodeInfo, gpus
 			PhysicalCores: len(allCores),
 			Sockets:       len(totalSockets),
 		},
-		Memory:    jsonMemory{TotalBytes: sumNodeMemTotals(nodes)},
 		NUMANodes: toJSONNodes(nodes),
 		GPUs:      toJSONGPUs(gpus),
+	}
+	if total := sumNodeMemTotals(nodes); total != 0 {
+		m.Memory = &jsonMemory{TotalBytes: total}
 	}
 	if cpuMgrState != nil {
 		m.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)

@@ -146,10 +146,10 @@ type jsonMemory struct {
 }
 
 type jsonNUMANode struct {
-	ID       int        `json:"id"`
-	SocketID int        `json:"socketId"`
-	CPUs     []int      `json:"cpus"`
-	Memory   jsonMemory `json:"memory"`
+	ID       int         `json:"id"`
+	SocketID int         `json:"socketId"`
+	CPUs     []int       `json:"cpus"`
+	Memory   *jsonMemory `json:"memory,omitempty"`
 }
 
 type jsonGPU struct {
@@ -188,7 +188,7 @@ type jsonResources struct {
 
 type jsonMachine struct {
 	CPU        jsonCPUSummary  `json:"cpu"`
-	Memory     jsonMemory      `json:"memory"`
+	Memory     *jsonMemory     `json:"memory,omitempty"`
 	NUMANodes  []jsonNUMANode  `json:"numaNodes"`
 	GPUs       []jsonGPU       `json:"gpus,omitempty"`
 	CPUManager *jsonCPUManager `json:"cpuManager,omitempty"`

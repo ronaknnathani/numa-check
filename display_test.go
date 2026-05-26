@@ -479,10 +479,10 @@ func TestJSONTopoOutputContainsMemory(t *testing.T) {
 		Metadata:   jsonMetadata{Timestamp: "2026-05-25T19:30:00Z", NumaCheckVersion: "test"},
 		Machine: jsonMachine{
 			CPU:    jsonCPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
-			Memory: jsonMemory{TotalBytes: 8 * 1024 * 1024 * 1024},
+			Memory: &jsonMemory{TotalBytes: 8 * 1024 * 1024 * 1024},
 			NUMANodes: []jsonNUMANode{
 				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3},
-					Memory: jsonMemory{TotalBytes: 8 * 1024 * 1024 * 1024, FreeBytes: 4 * 1024 * 1024 * 1024}},
+					Memory: &jsonMemory{TotalBytes: 8 * 1024 * 1024 * 1024, FreeBytes: 4 * 1024 * 1024 * 1024}},
 			},
 		},
 	}

@@ -46,9 +46,9 @@ func TestMachineTopologyJSONSchema(t *testing.T) {
 		},
 		Machine: jsonMachine{
 			CPU:    jsonCPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
-			Memory: jsonMemory{TotalBytes: 8 << 30},
+			Memory: &jsonMemory{TotalBytes: 8 << 30},
 			NUMANodes: []jsonNUMANode{
-				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, Memory: jsonMemory{TotalBytes: 8 << 30, FreeBytes: 4 << 30}},
+				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, Memory: &jsonMemory{TotalBytes: 8 << 30, FreeBytes: 4 << 30}},
 			},
 		},
 	}
@@ -100,9 +100,9 @@ func TestProcessReportJSONSchema(t *testing.T) {
 		},
 		Machine: jsonMachine{
 			CPU:    jsonCPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
-			Memory: jsonMemory{TotalBytes: 8 << 30},
+			Memory: &jsonMemory{TotalBytes: 8 << 30},
 			NUMANodes: []jsonNUMANode{
-				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, Memory: jsonMemory{TotalBytes: 8 << 30}},
+				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, Memory: &jsonMemory{TotalBytes: 8 << 30}},
 			},
 			GPUs: []jsonGPU{{Index: 0, UUID: "GPU-abc", PCIID: "0000:17:00.0", NUMANode: 0}},
 		},
@@ -187,7 +187,7 @@ func TestProcessReportOmitsAbsentSections(t *testing.T) {
 		},
 		Machine: jsonMachine{
 			CPU:    jsonCPUSummary{Total: 1},
-			Memory: jsonMemory{TotalBytes: 1024},
+			Memory: &jsonMemory{TotalBytes: 1024},
 			NUMANodes: []jsonNUMANode{
 				{ID: 0, CPUs: []int{0}},
 			},
