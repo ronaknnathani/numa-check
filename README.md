@@ -50,7 +50,29 @@ $ numacheck -pid 4521 -json
 $ numacheck -pod my-pod -container my-container -json -numastat
 ```
 
-The `-json` flag replaces the visual grid with machine-readable JSON. Works with both `-topo` and process analysis modes. When combined with `-numastat`, the numastat output is included in the JSON. Container resources are included automatically when using `-pod`/`-container`.
+The `-json` flag emits a versioned, k8s-style envelope instead of the visual grid. Works with `-topo` and process analysis modes. Two kinds: `MachineTopology` (from `-topo`) and `ProcessReport` (from `-pid` / `-pod` + `-container`). Both share an envelope and a `machine` block; `ProcessReport` adds a `process` block carrying process-specific data (current CPU, allowed CPUs, per-NUMA-node memory, container resources, optional `numastat`). Identifiers — `host`, `timestamp`, `numaCheckVersion`, plus `pid` / `pod` / `container` when applicable — live under `metadata`, so they can be used directly as metric label dimensions. The `apiVersion` field (currently `numa-check/v1`) lets consumers detect schema changes.
+
+Example:
+
+```json
+{
+  "apiVersion": "numa-check/v1",
+  "kind": "MachineTopology",
+  "metadata": {
+    "timestamp": "2026-05-25T19:30:00Z",
+    "host": "node-foo",
+    "numaCheckVersion": "v0.5.0"
+  },
+  "machine": {
+    "cpu": { "total": 96, "physicalCores": 48, "sockets": 2 },
+    "memory": { "totalBytes": 805306368000 },
+    "numaNodes": [
+      { "id": 0, "socketId": 0, "cpus": [0,1,2,3], "memory": { "totalBytes": 402653184000, "freeBytes": 350000000000 } }
+    ],
+    "gpus": [ { "index": 0, "uuid": "GPU-...", "pciId": "0000:17:00.0", "numaNode": 0 } ]
+  }
+}
+```
 
 **Include numastat memory stats:**
 
