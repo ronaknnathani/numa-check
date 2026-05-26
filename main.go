@@ -172,19 +172,7 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 			APIVersion: "numa-check/v1",
 			Kind:       "MachineTopology",
 			Metadata:   buildMetadata(),
-			Machine: jsonMachine{
-				CPU: jsonCPUSummary{
-					Total:         len(numaMap),
-					PhysicalCores: len(allCores),
-					Sockets:       len(totalSockets),
-				},
-				Memory:    jsonMemory{TotalBytes: totalMem},
-				NUMANodes: toJSONNodes(nodes),
-				GPUs:      toJSONGPUs(gpus),
-			},
-		}
-		if cpuMgrState != nil {
-			out.Machine.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
+			Machine:    buildMachine(numaMap, nodes, gpus, allCores, totalSockets, cpuMgrState, cpuMgrEntries),
 		}
 		printJSON(out)
 		return
@@ -314,16 +302,7 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 			APIVersion: "numa-check/v1",
 			Kind:       "ProcessReport",
 			Metadata:   md,
-			Machine: jsonMachine{
-				CPU: jsonCPUSummary{
-					Total:         len(numaMap),
-					PhysicalCores: len(allCores),
-					Sockets:       len(totalSockets),
-				},
-				Memory:    jsonMemory{TotalBytes: sumNodeMemTotals(nodes)},
-				NUMANodes: toJSONNodes(nodes),
-				GPUs:      toJSONGPUs(gpus),
-			},
+			Machine:    buildMachine(numaMap, nodes, gpus, allCores, totalSockets, cpuMgrState, cpuMgrEntries),
 			Process: &jsonProcess{
 				CurrentCPU:        currentCPU,
 				CurrentNUMANode:   cpuNUMANode,
@@ -346,9 +325,6 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 			if err == nil {
 				out.Process.Numastat = strings.TrimSpace(string(raw))
 			}
-		}
-		if cpuMgrState != nil {
-			out.Machine.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
 		}
 		printJSON(out)
 		return
@@ -517,6 +493,23 @@ func toJSONResources(res crictlResources, gc int) *jsonResources {
 		return nil
 	}
 	return jr
+}
+
+func buildMachine(numaMap map[int]int, nodes []NUMANodeInfo, gpus []GPUDevice, allCores map[CoreInfo]bool, totalSockets map[int]bool, cpuMgrState *CPUManagerState, cpuMgrEntries []CPUManagerEntry) jsonMachine {
+	m := jsonMachine{
+		CPU: jsonCPUSummary{
+			Total:         len(numaMap),
+			PhysicalCores: len(allCores),
+			Sockets:       len(totalSockets),
+		},
+		Memory:    jsonMemory{TotalBytes: sumNodeMemTotals(nodes)},
+		NUMANodes: toJSONNodes(nodes),
+		GPUs:      toJSONGPUs(gpus),
+	}
+	if cpuMgrState != nil {
+		m.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
+	}
+	return m
 }
 
 func buildMetadata() jsonMetadata {
