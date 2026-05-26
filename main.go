@@ -92,7 +92,9 @@ Examples:
 	cmd := execRunner{}
 
 	if cfg.topoOnly {
-		runTopoOnly(fs, cmd, cfg.jsonOut, cfg.cpuManager)
+		if err := runTopoOnly(fs, cmd, cfg.jsonOut, cfg.cpuManager); err != nil {
+			fatalf("%v", err)
+		}
 		return
 	}
 
@@ -125,10 +127,19 @@ Examples:
 	runAnalysis(fs, cmd, pid, cfg.numastat, cfg.jsonOut, containerRes, cfg.cpuManager, cfg.pod, cfg.container)
 }
 
-func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath string) {
+func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath string) error {
+	if jsonOut {
+		out, err := buildTopoJSON(fs, cmd, cpuManagerPath)
+		if err != nil {
+			return err
+		}
+		printJSON(out)
+		return nil
+	}
+
 	numaMap, err := buildNUMAMap(fs)
 	if err != nil {
-		fatalf("reading NUMA topology: %v", err)
+		return fmt.Errorf("reading NUMA topology: %v", err)
 	}
 
 	gpus, gpuErr := discoverGPUs(fs, cmd)
@@ -167,17 +178,6 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 
 	totalMem := sumNodeMemTotals(nodes)
 
-	if jsonOut {
-		out := jsonMachineTopology{
-			APIVersion: "numa-check/v1",
-			Kind:       "MachineTopology",
-			Metadata:   buildMetadata(),
-			Machine:    buildMachine(numaMap, nodes, gpus, allCores, totalSockets, cpuMgrState, cpuMgrEntries),
-		}
-		printJSON(out)
-		return
-	}
-
 	fmt.Printf("\n%s\n\n", col(ansiBold, "numacheck — Machine Topology"))
 	printSection("Topology")
 
@@ -203,6 +203,44 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 	}
 
 	fmt.Println()
+	return nil
+}
+
+// buildTopoJSON gathers topology data and assembles the MachineTopology JSON envelope.
+// Returns an error only on unrecoverable failures (e.g., NUMA map unreadable). GPU and
+// CPU-manager errors are surfaced via warnf, matching the text path.
+func buildTopoJSON(fs FileSystem, cmd CommandRunner, cpuManagerPath string) (jsonMachineTopology, error) {
+	numaMap, err := buildNUMAMap(fs)
+	if err != nil {
+		return jsonMachineTopology{}, fmt.Errorf("reading NUMA topology: %v", err)
+	}
+
+	gpus, gpuErr := discoverGPUs(fs, cmd)
+	if gpuErr != nil {
+		warnf("GPU detection: %v", gpuErr)
+	}
+	nodes := buildNUMANodes(fs, numaMap, gpus)
+
+	var cpuMgrState *CPUManagerState
+	var cpuMgrEntries []CPUManagerEntry
+	if cpuManagerPath != "" {
+		state, err := readCPUManagerState(fs, cpuManagerPath)
+		if err != nil {
+			warnf("cpu manager: %v", err)
+		} else {
+			cpuMgrState = state
+			if state.PolicyName == "static" {
+				cpuMgrEntries = parseCPUManagerEntries(state)
+			}
+		}
+	}
+
+	return jsonMachineTopology{
+		APIVersion: "numa-check/v1",
+		Kind:       "MachineTopology",
+		Metadata:   buildMetadata(),
+		Machine:    buildMachine(fs, numaMap, nodes, gpus, cpuMgrState, cpuMgrEntries),
+	}, nil
 }
 
 func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOut bool, containerRes *crictlResources, cpuManagerPath string, pod, container string) {
@@ -285,24 +323,11 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 		md.Pod = pod
 		md.Container = container
 
-		allCores := make(map[CoreInfo]bool)
-		for cpu := range numaMap {
-			if info, err := getCPUTopology(fs, cpu); err == nil {
-				allCores[info] = true
-			}
-		}
-		totalSockets := make(map[int]bool)
-		for _, n := range nodes {
-			if n.SocketID >= 0 {
-				totalSockets[n.SocketID] = true
-			}
-		}
-
 		out := jsonProcessReport{
 			APIVersion: "numa-check/v1",
 			Kind:       "ProcessReport",
 			Metadata:   md,
-			Machine:    buildMachine(numaMap, nodes, gpus, allCores, totalSockets, cpuMgrState, cpuMgrEntries),
+			Machine:    buildMachine(fs, numaMap, nodes, gpus, cpuMgrState, cpuMgrEntries),
 			Process: &jsonProcess{
 				CurrentCPU:        currentCPU,
 				CurrentNUMANode:   cpuNUMANode,
@@ -495,7 +520,20 @@ func toJSONResources(res crictlResources, gc int) *jsonResources {
 	return jr
 }
 
-func buildMachine(numaMap map[int]int, nodes []NUMANodeInfo, gpus []GPUDevice, allCores map[CoreInfo]bool, totalSockets map[int]bool, cpuMgrState *CPUManagerState, cpuMgrEntries []CPUManagerEntry) jsonMachine {
+func buildMachine(fs FileSystem, numaMap map[int]int, nodes []NUMANodeInfo, gpus []GPUDevice, cpuMgrState *CPUManagerState, cpuMgrEntries []CPUManagerEntry) jsonMachine {
+	allCores := make(map[CoreInfo]bool)
+	for cpu := range numaMap {
+		if info, err := getCPUTopology(fs, cpu); err == nil {
+			allCores[info] = true
+		}
+	}
+	totalSockets := make(map[int]bool)
+	for _, n := range nodes {
+		if n.SocketID >= 0 {
+			totalSockets[n.SocketID] = true
+		}
+	}
+
 	m := jsonMachine{
 		CPU: jsonCPUSummary{
 			Total:         len(numaMap),
