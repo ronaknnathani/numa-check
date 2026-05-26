@@ -12,6 +12,12 @@ import (
 
 var version = "dev"
 
+// Test seams for buildMetadata. Tests can swap these and restore via t.Cleanup.
+var (
+	hostnameFn = os.Hostname
+	nowFn      = time.Now
+)
+
 type config struct {
 	pid        int
 	pod        string
@@ -323,6 +329,10 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 		md.Pod = pod
 		md.Container = container
 
+		if affinityList == nil {
+			affinityList = []int{}
+		}
+
 		out := jsonProcessReport{
 			APIVersion: "numa-check/v1",
 			Kind:       "ProcessReport",
@@ -556,13 +566,13 @@ func buildMachine(fs FileSystem, numaMap map[int]int, nodes []NUMANodeInfo, gpus
 }
 
 func buildMetadata() jsonMetadata {
-	hostname, err := os.Hostname()
+	hostname, err := hostnameFn()
 	if err != nil {
 		slog.Debug("os.Hostname failed", "error", err)
 		hostname = ""
 	}
 	return jsonMetadata{
-		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+		Timestamp:        nowFn().UTC().Format(time.RFC3339),
 		Host:             hostname,
 		NumaCheckVersion: version,
 	}

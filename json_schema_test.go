@@ -175,6 +175,65 @@ func TestProcessReportJSONSchema(t *testing.T) {
 	}
 }
 
+func TestToJSONProcessMemPerNode(t *testing.T) {
+	nodes := []NUMANodeInfo{
+		{ID: 0},
+		{ID: 1},
+		{ID: 2},
+	}
+	tests := []struct {
+		name       string
+		processMem map[int]int64
+		want       []jsonProcessMemPerNode
+	}{
+		{
+			name:       "nil processMem returns nil",
+			processMem: nil,
+			want:       nil,
+		},
+		{
+			name:       "no matching node ids returns nil",
+			processMem: map[int]int64{7: 100, 9: 200},
+			want:       nil,
+		},
+		{
+			name:       "populated returns entries in node order",
+			processMem: map[int]int64{2: 300, 0: 100, 1: 200},
+			want: []jsonProcessMemPerNode{
+				{ID: 0, Bytes: 100},
+				{ID: 1, Bytes: 200},
+				{ID: 2, Bytes: 300},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toJSONProcessMemPerNode(nodes, tt.processMem)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d (got=%v)", len(got), len(tt.want), got)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("entry[%d] = %+v, want %+v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestProcessAllowedCPUsEmptyMarshalsAsArray pins the contract that an
+// empty AllowedCPUs slice marshals to `[]`, not `null`.
+func TestProcessAllowedCPUsEmptyMarshalsAsArray(t *testing.T) {
+	p := jsonProcess{AllowedCPUs: []int{}}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"allowedCpus":[]`) {
+		t.Errorf("expected allowedCpus to marshal as []; got: %s", string(data))
+	}
+}
+
 func TestProcessReportOmitsAbsentSections(t *testing.T) {
 	out := jsonProcessReport{
 		APIVersion: "numa-check/v1",
@@ -313,16 +372,32 @@ func TestRunTopoOnlyJSONWiring(t *testing.T) {
 
 // TestBuildMetadata pins the basic shape of jsonMetadata produced by
 // buildMetadata: RFC3339 timestamp, version wired through, hostname present.
+// Swaps the hostnameFn/nowFn seams so timestamp and host are deterministic.
 func TestBuildMetadata(t *testing.T) {
+	origHostname := hostnameFn
+	origNow := nowFn
+	t.Cleanup(func() {
+		hostnameFn = origHostname
+		nowFn = origNow
+	})
+	hostnameFn = func() (string, error) { return "stub-host", nil }
+	fixed := time.Date(2026, 5, 25, 19, 30, 0, 0, time.UTC)
+	nowFn = func() time.Time { return fixed }
+
 	md := buildMetadata()
 
+	if md.Timestamp != "2026-05-25T19:30:00Z" {
+		t.Errorf("Timestamp = %q, want 2026-05-25T19:30:00Z", md.Timestamp)
+	}
 	if _, err := time.Parse(time.RFC3339, md.Timestamp); err != nil {
 		t.Errorf("Timestamp %q is not RFC3339: %v", md.Timestamp, err)
+	}
+	if md.Host != "stub-host" {
+		t.Errorf("Host = %q, want stub-host", md.Host)
 	}
 	if md.NumaCheckVersion != version {
 		t.Errorf("NumaCheckVersion = %q, want %q", md.NumaCheckVersion, version)
 	}
-	// Host may be empty on os.Hostname failure; just confirm the call doesn't crash.
 	// PID/Pod/Container are zero values here since buildMetadata only sets the
 	// three fields above.
 	if md.PID != 0 || md.Pod != "" || md.Container != "" {

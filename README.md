@@ -61,7 +61,7 @@ Example:
   "metadata": {
     "timestamp": "2026-05-25T19:30:00Z",
     "host": "node-foo",
-    "numaCheckVersion": "v0.5.0"
+    "numaCheckVersion": "dev"
   },
   "machine": {
     "cpu": { "total": 96, "physicalCores": 48, "sockets": 2 },
