@@ -1,4 +1,4 @@
-BINARY = numa-check
+BINARY = numacheck
 GOOS   = linux
 GOARCH = amd64
 
