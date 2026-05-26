@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // helper: marshal v and unmarshal into a generic map for structural assertions.
@@ -216,5 +217,116 @@ func TestProcessReportOmitsAbsentSections(t *testing.T) {
 		if strings.Contains(s, k) {
 			t.Errorf("expected JSON to omit %s, got: %s", k, s)
 		}
+	}
+}
+
+// TestRunTopoOnlyJSONWiring exercises the JSON construction path end-to-end
+// from a stubbed FileSystem so a field/source rename in main.go cannot slip
+// through (the other tests in this file build structs by hand).
+func TestRunTopoOnlyJSONWiring(t *testing.T) {
+	fs := &mockFS{
+		files: map[string]string{
+			"/sys/devices/system/node/node0/cpulist":                   "0-1",
+			"/sys/devices/system/node/node1/cpulist":                   "2-3",
+			"/sys/devices/system/node/node0/meminfo":                   "Node 0 MemTotal:     65536 kB\nNode 0 MemFree:      32768 kB\n",
+			"/sys/devices/system/node/node1/meminfo":                   "Node 1 MemTotal:     65536 kB\nNode 1 MemFree:      16384 kB\n",
+			"/sys/devices/system/cpu/cpu0/topology/physical_package_id": "0",
+			"/sys/devices/system/cpu/cpu0/topology/core_id":             "0",
+			"/sys/devices/system/cpu/cpu1/topology/physical_package_id": "0",
+			"/sys/devices/system/cpu/cpu1/topology/core_id":             "1",
+			"/sys/devices/system/cpu/cpu2/topology/physical_package_id": "1",
+			"/sys/devices/system/cpu/cpu2/topology/core_id":             "0",
+			"/sys/devices/system/cpu/cpu3/topology/physical_package_id": "1",
+			"/sys/devices/system/cpu/cpu3/topology/core_id":             "1",
+		},
+		globs: map[string][]string{
+			"/sys/devices/system/node/node[0-9]*": {
+				"/sys/devices/system/node/node0",
+				"/sys/devices/system/node/node1",
+			},
+			// No PCI devices -> discoverGPUs returns nil, no error.
+			"/sys/bus/pci/devices/*": {},
+		},
+	}
+	cmd := &mockCmd{} // unused: no nvidia-smi call when PCI glob is empty.
+
+	out := captureStdout(t, func() {
+		if err := runTopoOnly(fs, cmd, true, ""); err != nil {
+			t.Fatalf("runTopoOnly: %v", err)
+		}
+	})
+
+	var m map[string]any
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		t.Fatalf("decode captured JSON: %v\noutput: %s", err, out)
+	}
+
+	checks := map[string]any{
+		"apiVersion":                "numa-check/v1",
+		"kind":                      "MachineTopology",
+		"machine.cpu.total":         float64(4),
+		"machine.cpu.physicalCores": float64(4), // 2 cores per socket × 2 sockets
+		"machine.cpu.sockets":       float64(2),
+		"machine.memory.totalBytes": float64(2 * 65536 * 1024),
+	}
+	for path, want := range checks {
+		if got := getPath(m, path); got != want {
+			t.Errorf("%s = %v (%T), want %v (%T)", path, got, got, want, want)
+		}
+	}
+
+	// metadata.host should be present (possibly empty if os.Hostname fails).
+	if _, ok := getPath(m, "metadata").(map[string]any)["host"]; !ok {
+		t.Errorf("metadata.host key missing: %s", out)
+	}
+	ts, _ := getPath(m, "metadata.timestamp").(string)
+	if _, err := time.Parse(time.RFC3339, ts); err != nil {
+		t.Errorf("metadata.timestamp %q is not RFC3339: %v", ts, err)
+	}
+	if got := getPath(m, "metadata.numaCheckVersion"); got != version {
+		t.Errorf("metadata.numaCheckVersion = %v, want %v", got, version)
+	}
+
+	// numaNodes should be ordered by ID with the expected CPU sets.
+	nodes, _ := getPath(m, "machine.numaNodes").([]any)
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 numaNodes, got %d (out=%s)", len(nodes), out)
+	}
+	node0 := nodes[0].(map[string]any)
+	if got := node0["id"]; got != float64(0) {
+		t.Errorf("numaNodes[0].id = %v", got)
+	}
+	if got := node0["socketId"]; got != float64(0) {
+		t.Errorf("numaNodes[0].socketId = %v", got)
+	}
+	cpus0, _ := node0["cpus"].([]any)
+	if len(cpus0) != 2 || cpus0[0] != float64(0) || cpus0[1] != float64(1) {
+		t.Errorf("numaNodes[0].cpus = %v, want [0 1]", cpus0)
+	}
+	if got := getPath(node0, "memory.totalBytes"); got != float64(65536*1024) {
+		t.Errorf("numaNodes[0].memory.totalBytes = %v", got)
+	}
+	if got := getPath(node0, "memory.freeBytes"); got != float64(32768*1024) {
+		t.Errorf("numaNodes[0].memory.freeBytes = %v", got)
+	}
+}
+
+// TestBuildMetadata pins the basic shape of jsonMetadata produced by
+// buildMetadata: RFC3339 timestamp, version wired through, hostname present.
+func TestBuildMetadata(t *testing.T) {
+	md := buildMetadata()
+
+	if _, err := time.Parse(time.RFC3339, md.Timestamp); err != nil {
+		t.Errorf("Timestamp %q is not RFC3339: %v", md.Timestamp, err)
+	}
+	if md.NumaCheckVersion != version {
+		t.Errorf("NumaCheckVersion = %q, want %q", md.NumaCheckVersion, version)
+	}
+	// Host may be empty on os.Hostname failure; just confirm the call doesn't crash.
+	// PID/Pod/Container are zero values here since buildMetadata only sets the
+	// three fields above.
+	if md.PID != 0 || md.Pod != "" || md.Container != "" {
+		t.Errorf("expected PID/Pod/Container zero, got pid=%d pod=%q container=%q",
+			md.PID, md.Pod, md.Container)
 	}
 }
