@@ -24,12 +24,12 @@ jobs:
       - name: Build
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=${VERSION}" -o numa-check .
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=${VERSION}" -o numacheck .
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" numa-check \
+          gh release create "${GITHUB_REF_NAME}" numacheck \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes

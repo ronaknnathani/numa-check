@@ -1,4 +1,4 @@
-# numa-check
+# numacheck
 
 ## Why
 
@@ -6,12 +6,12 @@ On multi-socket servers, a CPU accessing memory on a remote NUMA node pays a ste
 
 ## What
 
-`numa-check` is a single-binary Linux CLI that reads sysfs and procfs to show you exactly where a process (or container) is placed in the machine's NUMA topology. It reports CPU affinity, pinning status, physical core layout, NUMA node distribution, and GPU-to-NUMA locality -- all rendered as a visual grid so you can spot misplacement at a glance.
+`numacheck` is a single-binary Linux CLI that reads sysfs and procfs to show you exactly where a process (or container) is placed in the machine's NUMA topology. It reports CPU affinity, pinning status, physical core layout, NUMA node distribution, and GPU-to-NUMA locality -- all rendered as a visual grid so you can spot misplacement at a glance.
 
 ## Install
 
 ```
-GOOS=linux go build -o numa-check .
+GOOS=linux go build -o numacheck .
 ```
 
 Copy the binary to your target node. No external dependencies for core analysis -- it reads `/sys` and `/proc` directly.
@@ -21,7 +21,7 @@ Copy the binary to your target node. No external dependencies for core analysis 
 **See the machine topology** (no PID needed):
 
 ```
-numa-check -topo
+numacheck -topo
 ```
 
 ![Machine topology](images/topo.png)
@@ -29,7 +29,7 @@ numa-check -topo
 **Check a process by PID** -- the grid shows which CPUs are allowed, which CPU is currently running, and which are unavailable:
 
 ```
-numa-check -pid <PID>
+numacheck -pid <PID>
 ```
 
 ![Process analysis](images/pid.png)
@@ -37,7 +37,7 @@ numa-check -pid <PID>
 **Check a Kubernetes container** (requires `crictl` on the node) -- also shows container resource requests/limits:
 
 ```
-numa-check -pod <pod> -container <container>
+numacheck -pod <pod> -container <container>
 ```
 
 ![Container analysis](images/pod.png)
@@ -45,9 +45,9 @@ numa-check -pod <pod> -container <container>
 **JSON output** for scripting and automation:
 
 ```
-$ numa-check -topo -json
-$ numa-check -pid 4521 -json
-$ numa-check -pod my-pod -container my-container -json -numastat
+$ numacheck -topo -json
+$ numacheck -pid 4521 -json
+$ numacheck -pod my-pod -container my-container -json -numastat
 ```
 
 The `-json` flag replaces the visual grid with machine-readable JSON. Works with both `-topo` and process analysis modes. When combined with `-numastat`, the numastat output is included in the JSON. Container resources are included automatically when using `-pod`/`-container`.
@@ -55,7 +55,7 @@ The `-json` flag replaces the visual grid with machine-readable JSON. Works with
 **Include numastat memory stats:**
 
 ```
-$ numa-check -pid 4521 -numastat
+$ numacheck -pid 4521 -numastat
 ```
 
 ## Requirements

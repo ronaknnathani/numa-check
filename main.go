@@ -23,12 +23,12 @@ type config struct {
 }
 
 func fatalf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "numa-check: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "numacheck: "+format+"\n", args...)
 	os.Exit(1)
 }
 
 func warnf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "numa-check: warning: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "numacheck: warning: "+format+"\n", args...)
 }
 
 func main() {
@@ -46,24 +46,24 @@ func main() {
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: numa-check [flags]\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: numacheck [flags]\n\n")
 		fmt.Fprintf(os.Stderr, "Analyze NUMA topology for a Linux process.\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
 Examples:
-  numa-check -topo                              machine topology only
-  numa-check -pid 12345                         analyze a process
-  numa-check -pod mypod -container mycontainer  analyze a container
-  numa-check -pid 12345 -numastat               include NUMA memory stats
-  numa-check -pid 12345 -json                   JSON output
-  numa-check -topo -cpumanager /var/lib/kubelet/cpu_manager_state
+  numacheck -topo                              machine topology only
+  numacheck -pid 12345                         analyze a process
+  numacheck -pod mypod -container mycontainer  analyze a container
+  numacheck -pid 12345 -numastat               include NUMA memory stats
+  numacheck -pid 12345 -json                   JSON output
+  numacheck -topo -cpumanager /var/lib/kubelet/cpu_manager_state
 `)
 	}
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("numa-check %s\n", version)
+		fmt.Printf("numacheck %s\n", version)
 		return
 	}
 
@@ -182,7 +182,7 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 		return
 	}
 
-	fmt.Printf("\n%s\n\n", col(ansiBold, "numa-check — Machine Topology"))
+	fmt.Printf("\n%s\n\n", col(ansiBold, "numacheck — Machine Topology"))
 	printSection("Topology")
 
 	summary := fmt.Sprintf("  %d CPUs (%d physical cores), %d NUMA nodes, %d sockets",
@@ -315,7 +315,7 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 		return
 	}
 
-	fmt.Printf("\n%s\n\n", col(ansiBold, fmt.Sprintf("numa-check — PID %d", pid)))
+	fmt.Printf("\n%s\n\n", col(ansiBold, fmt.Sprintf("numacheck — PID %d", pid)))
 
 	printSection(fmt.Sprintf("Process — PID %d", pid))
 

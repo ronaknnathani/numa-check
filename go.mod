@@ -1,4 +1,4 @@
-module numa-check
+module numacheck
 
 go 1.25.0
 
