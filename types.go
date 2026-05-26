@@ -123,74 +123,107 @@ type CPUManagerEntry struct {
 	CPUSetRaw     string
 }
 
-// JSON output types.
+// JSON output types — k8s-style envelope, schema versioned via APIVersion.
 
-type jsonTopoOutput struct {
-	TotalCPUs        int             `json:"total_cpus"`
-	PhysicalCores    int             `json:"physical_cores"`
-	Sockets          int             `json:"sockets"`
-	TotalMemoryBytes int64           `json:"total_memory_bytes,omitempty"`
-	NUMANodes        []jsonNUMANode  `json:"numa_nodes"`
-	GPUs             []jsonGPU       `json:"gpus,omitempty"`
-	CPUManager       *jsonCPUManager `json:"cpu_manager,omitempty"`
+type jsonMetadata struct {
+	Timestamp        string `json:"timestamp"`
+	Host             string `json:"host,omitempty"`
+	NumaCheckVersion string `json:"numaCheckVersion"`
+	PID              int    `json:"pid,omitempty"`
+	Pod              string `json:"pod,omitempty"`
+	Container        string `json:"container,omitempty"`
 }
 
-type jsonProcessOutput struct {
-	PID                int             `json:"pid"`
-	AllowedCPUs        []int           `json:"allowed_cpus"`
-	SystemCPUs         int             `json:"system_cpus,omitempty"`
-	Pinned             bool            `json:"pinned"`
-	CurrentCPU         int             `json:"current_cpu"`
-	CurrentNUMA        int             `json:"current_numa_node"`
-	TotalMemoryBytes   int64           `json:"total_memory_bytes,omitempty"`
-	ProcessMemoryBytes int64           `json:"process_memory_bytes,omitempty"`
-	NUMANodes          []jsonNUMANode  `json:"numa_nodes"`
-	GPUs               []jsonGPU       `json:"gpus,omitempty"`
-	AllowedGPUs        []string        `json:"allowed_gpus,omitempty"`
-	Resources          *jsonResources  `json:"container_resources,omitempty"`
-	Numastat           string          `json:"numastat,omitempty"`
-	CPUManager         *jsonCPUManager `json:"cpu_manager,omitempty"`
+type jsonCPUSummary struct {
+	Total         int `json:"total"`
+	PhysicalCores int `json:"physicalCores"`
+	Sockets       int `json:"sockets"`
+}
+
+type jsonMemory struct {
+	TotalBytes int64 `json:"totalBytes,omitempty"`
+	FreeBytes  int64 `json:"freeBytes,omitempty"`
 }
 
 type jsonNUMANode struct {
-	ID              int   `json:"id"`
-	SocketID        int   `json:"socket_id"`
-	CPUs            []int `json:"cpus"`
-	MemTotalBytes   int64 `json:"mem_total_bytes,omitempty"`
-	MemFreeBytes    int64 `json:"mem_free_bytes,omitempty"`
-	ProcessMemBytes int64 `json:"process_mem_bytes,omitempty"`
+	ID       int        `json:"id"`
+	SocketID int        `json:"socketId"`
+	CPUs     []int      `json:"cpus"`
+	Memory   jsonMemory `json:"memory,omitempty"`
 }
 
 type jsonGPU struct {
 	Index    int    `json:"index"`
 	UUID     string `json:"uuid,omitempty"`
-	PCIID    string `json:"pci_id"`
-	NUMANode int    `json:"numa_node"`
-}
-
-type jsonResources struct {
-	CPURequest         *float64 `json:"cpu_request_cores,omitempty"`
-	CPULimit           *float64 `json:"cpu_limit_cores,omitempty"`
-	MemoryLimitBytes   *int64   `json:"memory_limit_bytes,omitempty"`
-	GPUCount           int      `json:"gpu_count,omitempty"`
-}
-
-type jsonCPUManager struct {
-	PolicyName  string                   `json:"policy_name"`
-	DefaultCPUs []int                    `json:"default_cpus,omitempty"`
-	Entries     []jsonCPUManagerEntry    `json:"entries,omitempty"`
-	PerNUMANode []jsonCPUManagerNUMANode `json:"per_numa_node,omitempty"`
+	PCIID    string `json:"pciId"`
+	NUMANode int    `json:"numaNode"`
 }
 
 type jsonCPUManagerEntry struct {
-	PodUID        string `json:"pod_uid"`
-	ContainerName string `json:"container_name"`
+	PodUID        string `json:"podUid"`
+	ContainerName string `json:"containerName"`
 	CPUs          []int  `json:"cpus"`
 }
 
 type jsonCPUManagerNUMANode struct {
-	NodeID        int `json:"node_id"`
-	ExclusiveCPUs int `json:"exclusive_cpus"`
-	RemainingCPUs int `json:"remaining_cpus"`
-	TotalCPUs     int `json:"total_cpus"`
+	NodeID        int `json:"nodeId"`
+	ExclusiveCPUs int `json:"exclusiveCpus"`
+	RemainingCPUs int `json:"remainingCpus"`
+	TotalCPUs     int `json:"totalCpus"`
+}
+
+type jsonCPUManager struct {
+	PolicyName  string                   `json:"policyName"`
+	DefaultCPUs []int                    `json:"defaultCpus,omitempty"`
+	Entries     []jsonCPUManagerEntry    `json:"entries,omitempty"`
+	PerNUMANode []jsonCPUManagerNUMANode `json:"perNumaNode,omitempty"`
+}
+
+type jsonResources struct {
+	CPURequestCores  *float64 `json:"cpuRequestCores,omitempty"`
+	CPULimitCores    *float64 `json:"cpuLimitCores,omitempty"`
+	MemoryLimitBytes *int64   `json:"memoryLimitBytes,omitempty"`
+	GPUCount         int      `json:"gpuCount,omitempty"`
+}
+
+type jsonMachine struct {
+	CPU        jsonCPUSummary  `json:"cpu"`
+	Memory     jsonMemory      `json:"memory,omitempty"`
+	NUMANodes  []jsonNUMANode  `json:"numaNodes"`
+	GPUs       []jsonGPU       `json:"gpus,omitempty"`
+	CPUManager *jsonCPUManager `json:"cpuManager,omitempty"`
+}
+
+type jsonProcessMemPerNode struct {
+	ID    int   `json:"id"`
+	Bytes int64 `json:"bytes"`
+}
+
+type jsonProcess struct {
+	CurrentCPU         int                     `json:"currentCpu"`
+	CurrentNUMANode    int                     `json:"currentNumaNode"`
+	AllowedCPUs        []int                   `json:"allowedCpus"`
+	AllowedCPUCount    int                     `json:"allowedCpuCount"`
+	SystemCPUCount     int                     `json:"systemCpuCount,omitempty"`
+	Pinned             bool                    `json:"pinned"`
+	MemoryBytes        int64                   `json:"memoryBytes,omitempty"`
+	AllowedGPUs        []string                `json:"allowedGpus,omitempty"`
+	MemoryPerNUMANode  []jsonProcessMemPerNode `json:"memoryPerNumaNode,omitempty"`
+	ContainerResources *jsonResources          `json:"containerResources,omitempty"`
+	Numastat           string                  `json:"numastat,omitempty"`
+}
+
+type jsonMachineTopology struct {
+	APIVersion string       `json:"apiVersion"`
+	Kind       string       `json:"kind"`
+	Metadata   jsonMetadata `json:"metadata"`
+	Machine    jsonMachine  `json:"machine"`
+}
+
+type jsonProcessReport struct {
+	APIVersion string       `json:"apiVersion"`
+	Kind       string       `json:"kind"`
+	Metadata   jsonMetadata `json:"metadata"`
+	Machine    jsonMachine  `json:"machine"`
+	Process    *jsonProcess `json:"process,omitempty"`
 }

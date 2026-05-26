@@ -473,13 +473,17 @@ func TestRenderGPURows(t *testing.T) {
 }
 
 func TestJSONTopoOutputContainsMemory(t *testing.T) {
-	out := jsonTopoOutput{
-		TotalCPUs:        4,
-		PhysicalCores:    2,
-		Sockets:          1,
-		TotalMemoryBytes: 8 * 1024 * 1024 * 1024,
-		NUMANodes: []jsonNUMANode{
-			{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, MemTotalBytes: 8 * 1024 * 1024 * 1024, MemFreeBytes: 4 * 1024 * 1024 * 1024},
+	out := jsonMachineTopology{
+		APIVersion: "numa-check/v1",
+		Kind:       "MachineTopology",
+		Metadata:   jsonMetadata{Timestamp: "2026-05-25T19:30:00Z", NumaCheckVersion: "test"},
+		Machine: jsonMachine{
+			CPU:    jsonCPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
+			Memory: jsonMemory{TotalBytes: 8 * 1024 * 1024 * 1024},
+			NUMANodes: []jsonNUMANode{
+				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3},
+					Memory: jsonMemory{TotalBytes: 8 * 1024 * 1024 * 1024, FreeBytes: 4 * 1024 * 1024 * 1024}},
+			},
 		},
 	}
 	data, err := json.Marshal(out)
@@ -487,7 +491,7 @@ func TestJSONTopoOutputContainsMemory(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	s := string(data)
-	for _, want := range []string{`"mem_total_bytes"`, `"mem_free_bytes"`, `"total_memory_bytes"`} {
+	for _, want := range []string{`"totalBytes"`, `"freeBytes"`, `"machine"`, `"memory"`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("JSON missing %s: %s", want, s)
 		}

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 )
 
 var version = "dev"
@@ -121,7 +122,7 @@ Examples:
 		os.Exit(1)
 	}
 
-	runAnalysis(fs, cmd, pid, cfg.numastat, cfg.jsonOut, containerRes, cfg.cpuManager)
+	runAnalysis(fs, cmd, pid, cfg.numastat, cfg.jsonOut, containerRes, cfg.cpuManager, cfg.pod, cfg.container)
 }
 
 func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath string) {
@@ -167,16 +168,23 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 	totalMem := sumNodeMemTotals(nodes)
 
 	if jsonOut {
-		out := jsonTopoOutput{
-			TotalCPUs:        len(numaMap),
-			PhysicalCores:    len(allCores),
-			Sockets:          len(totalSockets),
-			TotalMemoryBytes: totalMem,
-			NUMANodes:        toJSONNodes(nodes, nil),
-			GPUs:             toJSONGPUs(gpus),
+		out := jsonMachineTopology{
+			APIVersion: "numa-check/v1",
+			Kind:       "MachineTopology",
+			Metadata:   buildMetadata(),
+			Machine: jsonMachine{
+				CPU: jsonCPUSummary{
+					Total:         len(numaMap),
+					PhysicalCores: len(allCores),
+					Sockets:       len(totalSockets),
+				},
+				Memory:    jsonMemory{TotalBytes: totalMem},
+				NUMANodes: toJSONNodes(nodes),
+				GPUs:      toJSONGPUs(gpus),
+			},
 		}
 		if cpuMgrState != nil {
-			out.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
+			out.Machine.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
 		}
 		printJSON(out)
 		return
@@ -209,7 +217,7 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 	fmt.Println()
 }
 
-func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOut bool, containerRes *crictlResources, cpuManagerPath string) {
+func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOut bool, containerRes *crictlResources, cpuManagerPath string, pod, container string) {
 	affinityList, err := getCPUAffinity(pid)
 	if err != nil {
 		fatalf("getting CPU affinity: %v", err)
@@ -284,32 +292,63 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 
 	if jsonOut {
 		pinned := systemCPUErr == nil && len(affinityList) < systemCPUs
-		out := jsonProcessOutput{
-			PID:                pid,
-			AllowedCPUs:        affinityList,
-			Pinned:             pinned,
-			CurrentCPU:         currentCPU,
-			CurrentNUMA:        cpuNUMANode,
-			TotalMemoryBytes:   sumNodeMemTotals(nodes),
-			ProcessMemoryBytes: sumProcessMem(processMem),
-			NUMANodes:          toJSONNodes(nodes, processMem),
-			GPUs:               toJSONGPUs(gpus),
-			AllowedGPUs:        mapKeys(allowedGPUs),
+		md := buildMetadata()
+		md.PID = pid
+		md.Pod = pod
+		md.Container = container
+
+		allCores := make(map[CoreInfo]bool)
+		for cpu := range numaMap {
+			if info, err := getCPUTopology(fs, cpu); err == nil {
+				allCores[info] = true
+			}
+		}
+		totalSockets := make(map[int]bool)
+		for _, n := range nodes {
+			if n.SocketID >= 0 {
+				totalSockets[n.SocketID] = true
+			}
+		}
+
+		out := jsonProcessReport{
+			APIVersion: "numa-check/v1",
+			Kind:       "ProcessReport",
+			Metadata:   md,
+			Machine: jsonMachine{
+				CPU: jsonCPUSummary{
+					Total:         len(numaMap),
+					PhysicalCores: len(allCores),
+					Sockets:       len(totalSockets),
+				},
+				Memory:    jsonMemory{TotalBytes: sumNodeMemTotals(nodes)},
+				NUMANodes: toJSONNodes(nodes),
+				GPUs:      toJSONGPUs(gpus),
+			},
+			Process: &jsonProcess{
+				CurrentCPU:        currentCPU,
+				CurrentNUMANode:   cpuNUMANode,
+				AllowedCPUs:       affinityList,
+				AllowedCPUCount:   len(affinityList),
+				Pinned:            pinned,
+				MemoryBytes:       sumProcessMem(processMem),
+				AllowedGPUs:       mapKeys(allowedGPUs),
+				MemoryPerNUMANode: toJSONProcessMemPerNode(nodes, processMem),
+			},
 		}
 		if systemCPUErr == nil {
-			out.SystemCPUs = systemCPUs
+			out.Process.SystemCPUCount = systemCPUs
 		}
 		if containerRes != nil {
-			out.Resources = toJSONResources(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr))
+			out.Process.ContainerResources = toJSONResources(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr))
 		}
 		if showNumastat {
 			raw, err := cmd.Run("numastat", "-p", fmt.Sprintf("%d", pid))
 			if err == nil {
-				out.Numastat = strings.TrimSpace(string(raw))
+				out.Process.Numastat = strings.TrimSpace(string(raw))
 			}
 		}
 		if cpuMgrState != nil {
-			out.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
+			out.Machine.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
 		}
 		printJSON(out)
 		return
@@ -413,19 +452,31 @@ func sumProcessMem(processMem map[int]int64) int64 {
 	return total
 }
 
-func toJSONNodes(nodes []NUMANodeInfo, processMem map[int]int64) []jsonNUMANode {
+func toJSONNodes(nodes []NUMANodeInfo) []jsonNUMANode {
 	out := make([]jsonNUMANode, len(nodes))
 	for i, n := range nodes {
 		out[i] = jsonNUMANode{
-			ID:            n.ID,
-			SocketID:      n.SocketID,
-			CPUs:          n.CPUs,
-			MemTotalBytes: n.MemTotalBytes,
-			MemFreeBytes:  n.MemFreeBytes,
+			ID:       n.ID,
+			SocketID: n.SocketID,
+			CPUs:     n.CPUs,
+			Memory:   jsonMemory{TotalBytes: n.MemTotalBytes, FreeBytes: n.MemFreeBytes},
 		}
-		if processMem != nil {
-			out[i].ProcessMemBytes = processMem[n.ID]
+	}
+	return out
+}
+
+func toJSONProcessMemPerNode(nodes []NUMANodeInfo, processMem map[int]int64) []jsonProcessMemPerNode {
+	if processMem == nil {
+		return nil
+	}
+	out := make([]jsonProcessMemPerNode, 0, len(nodes))
+	for _, n := range nodes {
+		if b, ok := processMem[n.ID]; ok {
+			out = append(out, jsonProcessMemPerNode{ID: n.ID, Bytes: b})
 		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -446,12 +497,12 @@ func toJSONResources(res crictlResources, gc int) *jsonResources {
 	hasContent := false
 	if res.CPUShares > 2 {
 		v := float64(res.CPUShares) / 1024
-		jr.CPURequest = &v
+		jr.CPURequestCores = &v
 		hasContent = true
 	}
 	if res.CPUQuota > 0 && res.CPUPeriod > 0 {
 		v := float64(res.CPUQuota) / float64(res.CPUPeriod)
-		jr.CPULimit = &v
+		jr.CPULimitCores = &v
 		hasContent = true
 	}
 	if res.MemoryLimitInBytes > 0 {
@@ -466,6 +517,19 @@ func toJSONResources(res crictlResources, gc int) *jsonResources {
 		return nil
 	}
 	return jr
+}
+
+func buildMetadata() jsonMetadata {
+	hostname, err := os.Hostname()
+	if err != nil {
+		slog.Debug("os.Hostname failed", "error", err)
+		hostname = ""
+	}
+	return jsonMetadata{
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+		Host:             hostname,
+		NumaCheckVersion: version,
+	}
 }
 
 func gpuCount(allowedGPUs map[string]bool, gpus []GPUDevice, envErr bool) int {
