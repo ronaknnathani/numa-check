@@ -293,7 +293,7 @@ func renderGrid(cpus []int, mode DisplayMode, allowedSet map[int]bool, currentCP
 	return rows
 }
 
-func printCPUManagerSection(state *CPUManagerState, entries []CPUManagerEntry, nodes []NUMANodeInfo) {
+func printCPUManagerSection(state *KubeletCPUManagerState, entries []KubeletCPUManagerEntry, nodes []NUMANodeInfo) {
 	printSection("CPU Manager")
 	fmt.Printf("  Policy .............. %s\n", state.PolicyName)
 	if state.DefaultCPUSet != "" {

@@ -108,15 +108,15 @@ type ContainerInfo struct {
 	Resources crictlResources
 }
 
-// CPUManagerState represents the kubelet cpu_manager_state JSON file.
-type CPUManagerState struct {
+// KubeletCPUManagerState represents the kubelet cpu_manager_state JSON file.
+type KubeletCPUManagerState struct {
 	PolicyName    string                       `json:"policyName"`
 	DefaultCPUSet string                       `json:"defaultCpuSet"`
 	Entries       map[string]map[string]string `json:"entries"`
 }
 
-// CPUManagerEntry is a parsed entry from CPU manager state.
-type CPUManagerEntry struct {
+// KubeletCPUManagerEntry is a parsed entry from CPU manager state.
+type KubeletCPUManagerEntry struct {
 	PodUID        string
 	ContainerName string
 	CPUs          []int

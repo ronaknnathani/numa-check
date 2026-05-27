@@ -170,8 +170,8 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 		}
 	}
 
-	var cpuMgrState *CPUManagerState
-	var cpuMgrEntries []CPUManagerEntry
+	var cpuMgrState *KubeletCPUManagerState
+	var cpuMgrEntries []KubeletCPUManagerEntry
 	if cpuManagerPath != "" {
 		state, err := readCPUManagerState(fs, cpuManagerPath)
 		if err != nil {
@@ -229,8 +229,8 @@ func buildTopoJSON(fs FileSystem, cmd CommandRunner, cpuManagerPath string) (api
 	}
 	nodes := buildNUMANodes(fs, numaMap, gpus)
 
-	var cpuMgrState *CPUManagerState
-	var cpuMgrEntries []CPUManagerEntry
+	var cpuMgrState *KubeletCPUManagerState
+	var cpuMgrEntries []KubeletCPUManagerEntry
 	if cpuManagerPath != "" {
 		state, err := readCPUManagerState(fs, cpuManagerPath)
 		if err != nil {
@@ -310,8 +310,8 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 		processMem = nil
 	}
 
-	var cpuMgrState *CPUManagerState
-	var cpuMgrEntries []CPUManagerEntry
+	var cpuMgrState *KubeletCPUManagerState
+	var cpuMgrEntries []KubeletCPUManagerEntry
 	if cpuManagerPath != "" {
 		state, err := readCPUManagerState(fs, cpuManagerPath)
 		if err != nil {
@@ -535,7 +535,7 @@ func toAPIResources(res crictlResources, gc int) *apiv1.Resources {
 	return jr
 }
 
-func buildMachine(fs FileSystem, numaMap map[int]int, nodes []NUMANodeInfo, gpus []GPUDevice, cpuMgrState *CPUManagerState, cpuMgrEntries []CPUManagerEntry) apiv1.Machine {
+func buildMachine(fs FileSystem, numaMap map[int]int, nodes []NUMANodeInfo, gpus []GPUDevice, cpuMgrState *KubeletCPUManagerState, cpuMgrEntries []KubeletCPUManagerEntry) apiv1.Machine {
 	allCores := make(map[CoreInfo]bool)
 	for cpu := range numaMap {
 		if info, err := getCPUTopology(fs, cpu); err == nil {

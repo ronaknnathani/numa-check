@@ -9,20 +9,20 @@ import (
 	"numacheck/apiv1"
 )
 
-func readCPUManagerState(fs FileSystem, path string) (*CPUManagerState, error) {
+func readCPUManagerState(fs FileSystem, path string) (*KubeletCPUManagerState, error) {
 	data, err := fs.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %v", path, err)
 	}
-	var state CPUManagerState
+	var state KubeletCPUManagerState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("parsing %s: %v", path, err)
 	}
 	return &state, nil
 }
 
-func parseCPUManagerEntries(state *CPUManagerState) []CPUManagerEntry {
-	var entries []CPUManagerEntry
+func parseCPUManagerEntries(state *KubeletCPUManagerState) []KubeletCPUManagerEntry {
+	var entries []KubeletCPUManagerEntry
 	for podUID, containers := range state.Entries {
 		for containerName, cpuSet := range containers {
 			cpus, err := expandCPUList(cpuSet)
@@ -30,7 +30,7 @@ func parseCPUManagerEntries(state *CPUManagerState) []CPUManagerEntry {
 				slog.Debug("skipping cpu_manager entry: invalid CPU set", "pod", podUID, "container", containerName, "cpuset", cpuSet, "error", err)
 				continue
 			}
-			entries = append(entries, CPUManagerEntry{
+			entries = append(entries, KubeletCPUManagerEntry{
 				PodUID:        podUID,
 				ContainerName: containerName,
 				CPUs:          cpus,
@@ -47,7 +47,7 @@ func parseCPUManagerEntries(state *CPUManagerState) []CPUManagerEntry {
 	return entries
 }
 
-func toAPICPUManager(state *CPUManagerState, entries []CPUManagerEntry, nodes []NUMANodeInfo) *apiv1.CPUManager {
+func toAPICPUManager(state *KubeletCPUManagerState, entries []KubeletCPUManagerEntry, nodes []NUMANodeInfo) *apiv1.CPUManager {
 	jcm := &apiv1.CPUManager{
 		PolicyName: state.PolicyName,
 	}
@@ -70,7 +70,7 @@ func toAPICPUManager(state *CPUManagerState, entries []CPUManagerEntry, nodes []
 }
 
 // perNUMANodeStats computes per-NUMA-node exclusive/remaining CPU counts.
-func perNUMANodeStats(entries []CPUManagerEntry, nodes []NUMANodeInfo) []apiv1.CPUManagerNUMANode {
+func perNUMANodeStats(entries []KubeletCPUManagerEntry, nodes []NUMANodeInfo) []apiv1.CPUManagerNUMANode {
 	if len(nodes) == 0 {
 		return nil
 	}
