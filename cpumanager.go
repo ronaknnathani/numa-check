@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+
+	"numacheck/apiv1"
 )
 
 func readCPUManagerState(fs FileSystem, path string) (*CPUManagerState, error) {
@@ -45,8 +47,8 @@ func parseCPUManagerEntries(state *CPUManagerState) []CPUManagerEntry {
 	return entries
 }
 
-func toJSONCPUManager(state *CPUManagerState, entries []CPUManagerEntry, nodes []NUMANodeInfo) *jsonCPUManager {
-	jcm := &jsonCPUManager{
+func toAPICPUManager(state *CPUManagerState, entries []CPUManagerEntry, nodes []NUMANodeInfo) *apiv1.CPUManager {
+	jcm := &apiv1.CPUManager{
 		PolicyName: state.PolicyName,
 	}
 	if state.DefaultCPUSet != "" {
@@ -55,7 +57,7 @@ func toJSONCPUManager(state *CPUManagerState, entries []CPUManagerEntry, nodes [
 		}
 	}
 	for _, e := range entries {
-		jcm.Entries = append(jcm.Entries, jsonCPUManagerEntry{
+		jcm.Entries = append(jcm.Entries, apiv1.CPUManagerEntry{
 			PodUID:        e.PodUID,
 			ContainerName: e.ContainerName,
 			CPUs:          e.CPUs,
@@ -68,7 +70,7 @@ func toJSONCPUManager(state *CPUManagerState, entries []CPUManagerEntry, nodes [
 }
 
 // perNUMANodeStats computes per-NUMA-node exclusive/remaining CPU counts.
-func perNUMANodeStats(entries []CPUManagerEntry, nodes []NUMANodeInfo) []jsonCPUManagerNUMANode {
+func perNUMANodeStats(entries []CPUManagerEntry, nodes []NUMANodeInfo) []apiv1.CPUManagerNUMANode {
 	if len(nodes) == 0 {
 		return nil
 	}
@@ -80,7 +82,7 @@ func perNUMANodeStats(entries []CPUManagerEntry, nodes []NUMANodeInfo) []jsonCPU
 		}
 	}
 
-	stats := make([]jsonCPUManagerNUMANode, len(nodes))
+	stats := make([]apiv1.CPUManagerNUMANode, len(nodes))
 	for i, n := range nodes {
 		exclusive := 0
 		for _, cpu := range n.CPUs {
@@ -88,7 +90,7 @@ func perNUMANodeStats(entries []CPUManagerEntry, nodes []NUMANodeInfo) []jsonCPU
 				exclusive++
 			}
 		}
-		stats[i] = jsonCPUManagerNUMANode{
+		stats[i] = apiv1.CPUManagerNUMANode{
 			NodeID:        n.ID,
 			ExclusiveCPUs: exclusive,
 			RemainingCPUs: len(n.CPUs) - exclusive,

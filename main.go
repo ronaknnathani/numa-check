@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"numacheck/apiv1"
 )
 
 var version = "dev"
@@ -215,10 +217,10 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 // buildTopoJSON gathers topology data and assembles the MachineTopology JSON envelope.
 // Returns an error only on unrecoverable failures (e.g., NUMA map unreadable). GPU and
 // CPU-manager errors are surfaced via warnf, matching the text path.
-func buildTopoJSON(fs FileSystem, cmd CommandRunner, cpuManagerPath string) (jsonMachineTopology, error) {
+func buildTopoJSON(fs FileSystem, cmd CommandRunner, cpuManagerPath string) (apiv1.MachineTopology, error) {
 	numaMap, err := buildNUMAMap(fs)
 	if err != nil {
-		return jsonMachineTopology{}, fmt.Errorf("reading NUMA topology: %v", err)
+		return apiv1.MachineTopology{}, fmt.Errorf("reading NUMA topology: %v", err)
 	}
 
 	gpus, gpuErr := discoverGPUs(fs, cmd)
@@ -241,7 +243,7 @@ func buildTopoJSON(fs FileSystem, cmd CommandRunner, cpuManagerPath string) (jso
 		}
 	}
 
-	return jsonMachineTopology{
+	return apiv1.MachineTopology{
 		APIVersion: "numacheck/v1",
 		Kind:       "MachineTopology",
 		Metadata:   buildMetadata(),
@@ -333,12 +335,12 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 			affinityList = []int{}
 		}
 
-		out := jsonProcessReport{
+		out := apiv1.ProcessReport{
 			APIVersion: "numacheck/v1",
 			Kind:       "ProcessReport",
 			Metadata:   md,
 			Machine:    buildMachine(fs, numaMap, nodes, gpus, cpuMgrState, cpuMgrEntries),
-			Process: &jsonProcess{
+			Process: &apiv1.Process{
 				CurrentCPU:        currentCPU,
 				CurrentNUMANode:   cpuNUMANode,
 				AllowedCPUs:       affinityList,
@@ -346,14 +348,14 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 				Pinned:            pinned,
 				MemoryBytes:       sumProcessMem(processMem),
 				AllowedGPUs:       mapKeys(allowedGPUs),
-				MemoryPerNUMANode: toJSONProcessMemPerNode(nodes, processMem),
+				MemoryPerNUMANode: toAPIProcessMemPerNode(nodes, processMem),
 			},
 		}
 		if systemCPUErr == nil {
 			out.Process.SystemCPUCount = systemCPUs
 		}
 		if containerRes != nil {
-			out.Process.ContainerResources = toJSONResources(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr))
+			out.Process.ContainerResources = toAPIResources(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr))
 		}
 		if showNumastat {
 			raw, err := cmd.Run("numastat", "-p", fmt.Sprintf("%d", pid))
@@ -463,30 +465,30 @@ func sumProcessMem(processMem map[int]int64) int64 {
 	return total
 }
 
-func toJSONNodes(nodes []NUMANodeInfo) []jsonNUMANode {
-	out := make([]jsonNUMANode, len(nodes))
+func toAPINodes(nodes []NUMANodeInfo) []apiv1.NUMANode {
+	out := make([]apiv1.NUMANode, len(nodes))
 	for i, n := range nodes {
-		jn := jsonNUMANode{
+		jn := apiv1.NUMANode{
 			ID:       n.ID,
 			SocketID: n.SocketID,
 			CPUs:     n.CPUs,
 		}
 		if n.MemTotalBytes != 0 || n.MemFreeBytes != 0 {
-			jn.Memory = &jsonMemory{TotalBytes: n.MemTotalBytes, FreeBytes: n.MemFreeBytes}
+			jn.Memory = &apiv1.Memory{TotalBytes: n.MemTotalBytes, FreeBytes: n.MemFreeBytes}
 		}
 		out[i] = jn
 	}
 	return out
 }
 
-func toJSONProcessMemPerNode(nodes []NUMANodeInfo, processMem map[int]int64) []jsonProcessMemPerNode {
+func toAPIProcessMemPerNode(nodes []NUMANodeInfo, processMem map[int]int64) []apiv1.ProcessMemPerNode {
 	if processMem == nil {
 		return nil
 	}
-	out := make([]jsonProcessMemPerNode, 0, len(nodes))
+	out := make([]apiv1.ProcessMemPerNode, 0, len(nodes))
 	for _, n := range nodes {
 		if b, ok := processMem[n.ID]; ok {
-			out = append(out, jsonProcessMemPerNode{ID: n.ID, Bytes: b})
+			out = append(out, apiv1.ProcessMemPerNode{ID: n.ID, Bytes: b})
 		}
 	}
 	if len(out) == 0 {
@@ -495,19 +497,19 @@ func toJSONProcessMemPerNode(nodes []NUMANodeInfo, processMem map[int]int64) []j
 	return out
 }
 
-func toJSONGPUs(gpus []GPUDevice) []jsonGPU {
+func toAPIGPUs(gpus []GPUDevice) []apiv1.GPU {
 	if len(gpus) == 0 {
 		return nil
 	}
-	out := make([]jsonGPU, len(gpus))
+	out := make([]apiv1.GPU, len(gpus))
 	for i, g := range gpus {
-		out[i] = jsonGPU{Index: g.Index, UUID: g.UUID, PCIID: g.PCIID, NUMANode: g.NUMANode}
+		out[i] = apiv1.GPU{Index: g.Index, UUID: g.UUID, PCIID: g.PCIID, NUMANode: g.NUMANode}
 	}
 	return out
 }
 
-func toJSONResources(res crictlResources, gc int) *jsonResources {
-	jr := &jsonResources{}
+func toAPIResources(res crictlResources, gc int) *apiv1.Resources {
+	jr := &apiv1.Resources{}
 	hasContent := false
 	if res.CPUShares > 2 {
 		v := float64(res.CPUShares) / 1024
@@ -533,7 +535,7 @@ func toJSONResources(res crictlResources, gc int) *jsonResources {
 	return jr
 }
 
-func buildMachine(fs FileSystem, numaMap map[int]int, nodes []NUMANodeInfo, gpus []GPUDevice, cpuMgrState *CPUManagerState, cpuMgrEntries []CPUManagerEntry) jsonMachine {
+func buildMachine(fs FileSystem, numaMap map[int]int, nodes []NUMANodeInfo, gpus []GPUDevice, cpuMgrState *CPUManagerState, cpuMgrEntries []CPUManagerEntry) apiv1.Machine {
 	allCores := make(map[CoreInfo]bool)
 	for cpu := range numaMap {
 		if info, err := getCPUTopology(fs, cpu); err == nil {
@@ -547,31 +549,31 @@ func buildMachine(fs FileSystem, numaMap map[int]int, nodes []NUMANodeInfo, gpus
 		}
 	}
 
-	m := jsonMachine{
-		CPU: jsonCPUSummary{
+	m := apiv1.Machine{
+		CPU: apiv1.CPUSummary{
 			Total:         len(numaMap),
 			PhysicalCores: len(allCores),
 			Sockets:       len(totalSockets),
 		},
-		NUMANodes: toJSONNodes(nodes),
-		GPUs:      toJSONGPUs(gpus),
+		NUMANodes: toAPINodes(nodes),
+		GPUs:      toAPIGPUs(gpus),
 	}
 	if total := sumNodeMemTotals(nodes); total != 0 {
-		m.Memory = &jsonMemory{TotalBytes: total}
+		m.Memory = &apiv1.Memory{TotalBytes: total}
 	}
 	if cpuMgrState != nil {
-		m.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
+		m.CPUManager = toAPICPUManager(cpuMgrState, cpuMgrEntries, nodes)
 	}
 	return m
 }
 
-func buildMetadata() jsonMetadata {
+func buildMetadata() apiv1.Metadata {
 	hostname, err := hostnameFn()
 	if err != nil {
 		slog.Debug("os.Hostname failed", "error", err)
 		hostname = ""
 	}
-	return jsonMetadata{
+	return apiv1.Metadata{
 		Timestamp:        nowFn().UTC().Format(time.RFC3339),
 		Host:             hostname,
 		NumacheckVersion: version,

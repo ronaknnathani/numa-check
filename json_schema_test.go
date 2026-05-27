@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"numacheck/apiv1"
 )
 
 // helper: marshal v and unmarshal into a generic map for structural assertions.
@@ -36,19 +38,19 @@ func getPath(m map[string]any, path string) any {
 }
 
 func TestMachineTopologyJSONSchema(t *testing.T) {
-	out := jsonMachineTopology{
+	out := apiv1.MachineTopology{
 		APIVersion: "numacheck/v1",
 		Kind:       "MachineTopology",
-		Metadata: jsonMetadata{
+		Metadata: apiv1.Metadata{
 			Timestamp:        "2026-05-25T19:30:00Z",
 			Host:             "node-foo",
 			NumacheckVersion: "v0.5.0",
 		},
-		Machine: jsonMachine{
-			CPU:    jsonCPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
-			Memory: &jsonMemory{TotalBytes: 8 << 30},
-			NUMANodes: []jsonNUMANode{
-				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, Memory: &jsonMemory{TotalBytes: 8 << 30, FreeBytes: 4 << 30}},
+		Machine: apiv1.Machine{
+			CPU:    apiv1.CPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
+			Memory: &apiv1.Memory{TotalBytes: 8 << 30},
+			NUMANodes: []apiv1.NUMANode{
+				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, Memory: &apiv1.Memory{TotalBytes: 8 << 30, FreeBytes: 4 << 30}},
 			},
 		},
 	}
@@ -87,10 +89,10 @@ func TestMachineTopologyJSONSchema(t *testing.T) {
 func TestProcessReportJSONSchema(t *testing.T) {
 	limit := int64(16 << 30)
 	cpuReq, cpuLim := 4.0, 8.0
-	out := jsonProcessReport{
+	out := apiv1.ProcessReport{
 		APIVersion: "numacheck/v1",
 		Kind:       "ProcessReport",
-		Metadata: jsonMetadata{
+		Metadata: apiv1.Metadata{
 			Timestamp:        "2026-05-25T19:30:00Z",
 			Host:             "node-foo",
 			NumacheckVersion: "v0.5.0",
@@ -98,15 +100,15 @@ func TestProcessReportJSONSchema(t *testing.T) {
 			Pod:              "my-pod",
 			Container:        "my-container",
 		},
-		Machine: jsonMachine{
-			CPU:    jsonCPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
-			Memory: &jsonMemory{TotalBytes: 8 << 30},
-			NUMANodes: []jsonNUMANode{
-				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, Memory: &jsonMemory{TotalBytes: 8 << 30}},
+		Machine: apiv1.Machine{
+			CPU:    apiv1.CPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
+			Memory: &apiv1.Memory{TotalBytes: 8 << 30},
+			NUMANodes: []apiv1.NUMANode{
+				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, Memory: &apiv1.Memory{TotalBytes: 8 << 30}},
 			},
-			GPUs: []jsonGPU{{Index: 0, UUID: "GPU-abc", PCIID: "0000:17:00.0", NUMANode: 0}},
+			GPUs: []apiv1.GPU{{Index: 0, UUID: "GPU-abc", PCIID: "0000:17:00.0", NUMANode: 0}},
 		},
-		Process: &jsonProcess{
+		Process: &apiv1.Process{
 			CurrentCPU:      2,
 			CurrentNUMANode: 0,
 			AllowedCPUs:     []int{0, 1, 2, 3},
@@ -115,10 +117,10 @@ func TestProcessReportJSONSchema(t *testing.T) {
 			Pinned:          false,
 			MemoryBytes:     2 << 30,
 			AllowedGPUs:     []string{"GPU-abc"},
-			MemoryPerNUMANode: []jsonProcessMemPerNode{
+			MemoryPerNUMANode: []apiv1.ProcessMemPerNode{
 				{ID: 0, Bytes: 2 << 30},
 			},
-			ContainerResources: &jsonResources{
+			ContainerResources: &apiv1.Resources{
 				CPURequestCores:  &cpuReq,
 				CPULimitCores:    &cpuLim,
 				MemoryLimitBytes: &limit,
@@ -175,7 +177,7 @@ func TestProcessReportJSONSchema(t *testing.T) {
 	}
 }
 
-func TestToJSONProcessMemPerNode(t *testing.T) {
+func TestToAPIProcessMemPerNode(t *testing.T) {
 	nodes := []NUMANodeInfo{
 		{ID: 0},
 		{ID: 1},
@@ -184,7 +186,7 @@ func TestToJSONProcessMemPerNode(t *testing.T) {
 	tests := []struct {
 		name       string
 		processMem map[int]int64
-		want       []jsonProcessMemPerNode
+		want       []apiv1.ProcessMemPerNode
 	}{
 		{
 			name:       "nil processMem returns nil",
@@ -199,7 +201,7 @@ func TestToJSONProcessMemPerNode(t *testing.T) {
 		{
 			name:       "populated returns entries in node order",
 			processMem: map[int]int64{2: 300, 0: 100, 1: 200},
-			want: []jsonProcessMemPerNode{
+			want: []apiv1.ProcessMemPerNode{
 				{ID: 0, Bytes: 100},
 				{ID: 1, Bytes: 200},
 				{ID: 2, Bytes: 300},
@@ -208,7 +210,7 @@ func TestToJSONProcessMemPerNode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := toJSONProcessMemPerNode(nodes, tt.processMem)
+			got := toAPIProcessMemPerNode(nodes, tt.processMem)
 			if len(got) != len(tt.want) {
 				t.Fatalf("len = %d, want %d (got=%v)", len(got), len(tt.want), got)
 			}
@@ -224,7 +226,7 @@ func TestToJSONProcessMemPerNode(t *testing.T) {
 // TestProcessAllowedCPUsEmptyMarshalsAsArray pins the contract that an
 // empty AllowedCPUs slice marshals to `[]`, not `null`.
 func TestProcessAllowedCPUsEmptyMarshalsAsArray(t *testing.T) {
-	p := jsonProcess{AllowedCPUs: []int{}}
+	p := apiv1.Process{AllowedCPUs: []int{}}
 	data, err := json.Marshal(p)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -235,23 +237,23 @@ func TestProcessAllowedCPUsEmptyMarshalsAsArray(t *testing.T) {
 }
 
 func TestProcessReportOmitsAbsentSections(t *testing.T) {
-	out := jsonProcessReport{
+	out := apiv1.ProcessReport{
 		APIVersion: "numacheck/v1",
 		Kind:       "ProcessReport",
-		Metadata: jsonMetadata{
+		Metadata: apiv1.Metadata{
 			Timestamp:        "2026-05-25T19:30:00Z",
 			Host:             "node-foo",
 			NumacheckVersion: "v0.5.0",
 			PID:              42,
 		},
-		Machine: jsonMachine{
-			CPU:    jsonCPUSummary{Total: 1},
-			Memory: &jsonMemory{TotalBytes: 1024},
-			NUMANodes: []jsonNUMANode{
+		Machine: apiv1.Machine{
+			CPU:    apiv1.CPUSummary{Total: 1},
+			Memory: &apiv1.Memory{TotalBytes: 1024},
+			NUMANodes: []apiv1.NUMANode{
 				{ID: 0, CPUs: []int{0}},
 			},
 		},
-		Process: &jsonProcess{
+		Process: &apiv1.Process{
 			CurrentCPU:      0,
 			CurrentNUMANode: 0,
 			AllowedCPUs:     []int{0},

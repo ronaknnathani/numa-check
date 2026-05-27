@@ -149,7 +149,7 @@ func TestParseCPUManagerEntries(t *testing.T) {
 	}
 }
 
-func TestToJSONCPUManager(t *testing.T) {
+func TestToAPICPUManager(t *testing.T) {
 	state := &CPUManagerState{
 		PolicyName:    "static",
 		DefaultCPUSet: "0-3",
@@ -162,7 +162,7 @@ func TestToJSONCPUManager(t *testing.T) {
 		{ID: 1, CPUs: []int{8, 9, 10, 11, 12, 13, 14, 15}},
 	}
 
-	got := toJSONCPUManager(state, entries, nodes)
+	got := toAPICPUManager(state, entries, nodes)
 	if got.PolicyName != "static" {
 		t.Errorf("PolicyName = %q, want %q", got.PolicyName, "static")
 	}

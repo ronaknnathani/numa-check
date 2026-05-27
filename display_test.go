@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"numacheck/apiv1"
 )
 
 // captureStdout runs fn while redirecting os.Stdout to a pipe and returns the captured output.
@@ -473,16 +475,16 @@ func TestRenderGPURows(t *testing.T) {
 }
 
 func TestJSONTopoOutputContainsMemory(t *testing.T) {
-	out := jsonMachineTopology{
+	out := apiv1.MachineTopology{
 		APIVersion: "numacheck/v1",
 		Kind:       "MachineTopology",
-		Metadata:   jsonMetadata{Timestamp: "2026-05-25T19:30:00Z", NumacheckVersion: "test"},
-		Machine: jsonMachine{
-			CPU:    jsonCPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
-			Memory: &jsonMemory{TotalBytes: 8 * 1024 * 1024 * 1024},
-			NUMANodes: []jsonNUMANode{
+		Metadata:   apiv1.Metadata{Timestamp: "2026-05-25T19:30:00Z", NumacheckVersion: "test"},
+		Machine: apiv1.Machine{
+			CPU:    apiv1.CPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
+			Memory: &apiv1.Memory{TotalBytes: 8 * 1024 * 1024 * 1024},
+			NUMANodes: []apiv1.NUMANode{
 				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3},
-					Memory: &jsonMemory{TotalBytes: 8 * 1024 * 1024 * 1024, FreeBytes: 4 * 1024 * 1024 * 1024}},
+					Memory: &apiv1.Memory{TotalBytes: 8 * 1024 * 1024 * 1024, FreeBytes: 4 * 1024 * 1024 * 1024}},
 			},
 		},
 	}
