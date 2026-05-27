@@ -242,7 +242,7 @@ func buildTopoJSON(fs FileSystem, cmd CommandRunner, cpuManagerPath string) (jso
 	}
 
 	return jsonMachineTopology{
-		APIVersion: "numa-check/v1",
+		APIVersion: "numacheck/v1",
 		Kind:       "MachineTopology",
 		Metadata:   buildMetadata(),
 		Machine:    buildMachine(fs, numaMap, nodes, gpus, cpuMgrState, cpuMgrEntries),
@@ -334,7 +334,7 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 		}
 
 		out := jsonProcessReport{
-			APIVersion: "numa-check/v1",
+			APIVersion: "numacheck/v1",
 			Kind:       "ProcessReport",
 			Metadata:   md,
 			Machine:    buildMachine(fs, numaMap, nodes, gpus, cpuMgrState, cpuMgrEntries),
@@ -574,7 +574,7 @@ func buildMetadata() jsonMetadata {
 	return jsonMetadata{
 		Timestamp:        nowFn().UTC().Format(time.RFC3339),
 		Host:             hostname,
-		NumaCheckVersion: version,
+		NumacheckVersion: version,
 	}
 }
 

@@ -50,18 +50,18 @@ $ numacheck -pid 4521 -json
 $ numacheck -pod my-pod -container my-container -json -numastat
 ```
 
-The `-json` flag emits a versioned, k8s-style envelope instead of the visual grid. Works with `-topo` and process analysis modes. Two kinds: `MachineTopology` (from `-topo`) and `ProcessReport` (from `-pid` / `-pod` + `-container`). Both share an envelope and a `machine` block; `ProcessReport` adds a `process` block carrying process-specific data (current CPU, allowed CPUs, per-NUMA-node memory, container resources, optional `numastat`). Identifiers — `host`, `timestamp`, `numaCheckVersion`, plus `pid` / `pod` / `container` when applicable — live under `metadata`, so they can be used directly as metric label dimensions. The `apiVersion` field (currently `numa-check/v1`) lets consumers detect schema changes.
+The `-json` flag emits a versioned, k8s-style envelope instead of the visual grid. Works with `-topo` and process analysis modes. Two kinds: `MachineTopology` (from `-topo`) and `ProcessReport` (from `-pid` / `-pod` + `-container`). Both share an envelope and a `machine` block; `ProcessReport` adds a `process` block carrying process-specific data (current CPU, allowed CPUs, per-NUMA-node memory, container resources, optional `numastat`). Identifiers — `host`, `timestamp`, `numacheckVersion`, plus `pid` / `pod` / `container` when applicable — live under `metadata`, so they can be used directly as metric label dimensions. The `apiVersion` field (currently `numacheck/v1`) lets consumers detect schema changes.
 
 Example:
 
 ```json
 {
-  "apiVersion": "numa-check/v1",
+  "apiVersion": "numacheck/v1",
   "kind": "MachineTopology",
   "metadata": {
     "timestamp": "2026-05-25T19:30:00Z",
     "host": "node-foo",
-    "numaCheckVersion": "dev"
+    "numacheckVersion": "dev"
   },
   "machine": {
     "cpu": { "total": 96, "physicalCores": 48, "sockets": 2 },

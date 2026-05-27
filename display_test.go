@@ -474,9 +474,9 @@ func TestRenderGPURows(t *testing.T) {
 
 func TestJSONTopoOutputContainsMemory(t *testing.T) {
 	out := jsonMachineTopology{
-		APIVersion: "numa-check/v1",
+		APIVersion: "numacheck/v1",
 		Kind:       "MachineTopology",
-		Metadata:   jsonMetadata{Timestamp: "2026-05-25T19:30:00Z", NumaCheckVersion: "test"},
+		Metadata:   jsonMetadata{Timestamp: "2026-05-25T19:30:00Z", NumacheckVersion: "test"},
 		Machine: jsonMachine{
 			CPU:    jsonCPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
 			Memory: &jsonMemory{TotalBytes: 8 * 1024 * 1024 * 1024},

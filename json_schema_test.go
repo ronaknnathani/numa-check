@@ -37,12 +37,12 @@ func getPath(m map[string]any, path string) any {
 
 func TestMachineTopologyJSONSchema(t *testing.T) {
 	out := jsonMachineTopology{
-		APIVersion: "numa-check/v1",
+		APIVersion: "numacheck/v1",
 		Kind:       "MachineTopology",
 		Metadata: jsonMetadata{
 			Timestamp:        "2026-05-25T19:30:00Z",
 			Host:             "node-foo",
-			NumaCheckVersion: "v0.5.0",
+			NumacheckVersion: "v0.5.0",
 		},
 		Machine: jsonMachine{
 			CPU:    jsonCPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
@@ -55,11 +55,11 @@ func TestMachineTopologyJSONSchema(t *testing.T) {
 
 	m := toMap(t, out)
 	checks := map[string]any{
-		"apiVersion":                "numa-check/v1",
+		"apiVersion":                "numacheck/v1",
 		"kind":                      "MachineTopology",
 		"metadata.timestamp":        "2026-05-25T19:30:00Z",
 		"metadata.host":             "node-foo",
-		"metadata.numaCheckVersion": "v0.5.0",
+		"metadata.numacheckVersion": "v0.5.0",
 		"machine.cpu.total":         float64(4),
 		"machine.cpu.physicalCores": float64(2),
 		"machine.cpu.sockets":       float64(1),
@@ -88,12 +88,12 @@ func TestProcessReportJSONSchema(t *testing.T) {
 	limit := int64(16 << 30)
 	cpuReq, cpuLim := 4.0, 8.0
 	out := jsonProcessReport{
-		APIVersion: "numa-check/v1",
+		APIVersion: "numacheck/v1",
 		Kind:       "ProcessReport",
 		Metadata: jsonMetadata{
 			Timestamp:        "2026-05-25T19:30:00Z",
 			Host:             "node-foo",
-			NumaCheckVersion: "v0.5.0",
+			NumacheckVersion: "v0.5.0",
 			PID:              12345,
 			Pod:              "my-pod",
 			Container:        "my-container",
@@ -130,7 +130,7 @@ func TestProcessReportJSONSchema(t *testing.T) {
 
 	m := toMap(t, out)
 	checks := map[string]any{
-		"apiVersion":                                  "numa-check/v1",
+		"apiVersion":                                  "numacheck/v1",
 		"kind":                                        "ProcessReport",
 		"metadata.pid":                                float64(12345),
 		"metadata.pod":                                "my-pod",
@@ -236,12 +236,12 @@ func TestProcessAllowedCPUsEmptyMarshalsAsArray(t *testing.T) {
 
 func TestProcessReportOmitsAbsentSections(t *testing.T) {
 	out := jsonProcessReport{
-		APIVersion: "numa-check/v1",
+		APIVersion: "numacheck/v1",
 		Kind:       "ProcessReport",
 		Metadata: jsonMetadata{
 			Timestamp:        "2026-05-25T19:30:00Z",
 			Host:             "node-foo",
-			NumaCheckVersion: "v0.5.0",
+			NumacheckVersion: "v0.5.0",
 			PID:              42,
 		},
 		Machine: jsonMachine{
@@ -321,7 +321,7 @@ func TestRunTopoOnlyJSONWiring(t *testing.T) {
 	}
 
 	checks := map[string]any{
-		"apiVersion":                "numa-check/v1",
+		"apiVersion":                "numacheck/v1",
 		"kind":                      "MachineTopology",
 		"machine.cpu.total":         float64(4),
 		"machine.cpu.physicalCores": float64(4), // 2 cores per socket × 2 sockets
@@ -342,8 +342,8 @@ func TestRunTopoOnlyJSONWiring(t *testing.T) {
 	if _, err := time.Parse(time.RFC3339, ts); err != nil {
 		t.Errorf("metadata.timestamp %q is not RFC3339: %v", ts, err)
 	}
-	if got := getPath(m, "metadata.numaCheckVersion"); got != version {
-		t.Errorf("metadata.numaCheckVersion = %v, want %v", got, version)
+	if got := getPath(m, "metadata.numacheckVersion"); got != version {
+		t.Errorf("metadata.numacheckVersion = %v, want %v", got, version)
 	}
 
 	// numaNodes should be ordered by ID with the expected CPU sets.
@@ -395,8 +395,8 @@ func TestBuildMetadata(t *testing.T) {
 	if md.Host != "stub-host" {
 		t.Errorf("Host = %q, want stub-host", md.Host)
 	}
-	if md.NumaCheckVersion != version {
-		t.Errorf("NumaCheckVersion = %q, want %q", md.NumaCheckVersion, version)
+	if md.NumacheckVersion != version {
+		t.Errorf("NumacheckVersion = %q, want %q", md.NumacheckVersion, version)
 	}
 	// PID/Pod/Container are zero values here since buildMetadata only sets the
 	// three fields above.

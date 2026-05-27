@@ -128,7 +128,7 @@ type CPUManagerEntry struct {
 type jsonMetadata struct {
 	Timestamp        string `json:"timestamp"`
 	Host             string `json:"host,omitempty"`
-	NumaCheckVersion string `json:"numaCheckVersion"`
+	NumacheckVersion string `json:"numacheckVersion"`
 	PID              int    `json:"pid,omitempty"`
 	Pod              string `json:"pod,omitempty"`
 	Container        string `json:"container,omitempty"`
