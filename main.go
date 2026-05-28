@@ -7,9 +7,18 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
+
+	apiv1 "numacheck/api/v1"
 )
 
 var version = "dev"
+
+// Test seams for buildMetadata. Tests can swap these and restore via t.Cleanup.
+var (
+	hostnameFn = os.Hostname
+	nowFn      = time.Now
+)
 
 type config struct {
 	pid        int
@@ -91,7 +100,9 @@ Examples:
 	cmd := execRunner{}
 
 	if cfg.topoOnly {
-		runTopoOnly(fs, cmd, cfg.jsonOut, cfg.cpuManager)
+		if err := runTopoOnly(fs, cmd, cfg.jsonOut, cfg.cpuManager); err != nil {
+			fatalf("%v", err)
+		}
 		return
 	}
 
@@ -121,13 +132,22 @@ Examples:
 		os.Exit(1)
 	}
 
-	runAnalysis(fs, cmd, pid, cfg.numastat, cfg.jsonOut, containerRes, cfg.cpuManager)
+	runAnalysis(fs, cmd, pid, cfg.numastat, cfg.jsonOut, containerRes, cfg.cpuManager, cfg.pod, cfg.container)
 }
 
-func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath string) {
+func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath string) error {
+	if jsonOut {
+		out, err := buildTopoJSON(fs, cmd, cpuManagerPath)
+		if err != nil {
+			return err
+		}
+		printJSON(out)
+		return nil
+	}
+
 	numaMap, err := buildNUMAMap(fs)
 	if err != nil {
-		fatalf("reading NUMA topology: %v", err)
+		return fmt.Errorf("reading NUMA topology: %v", err)
 	}
 
 	gpus, gpuErr := discoverGPUs(fs, cmd)
@@ -150,8 +170,8 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 		}
 	}
 
-	var cpuMgrState *CPUManagerState
-	var cpuMgrEntries []CPUManagerEntry
+	var cpuMgrState *KubeletCPUManagerState
+	var cpuMgrEntries []KubeletCPUManagerEntry
 	if cpuManagerPath != "" {
 		state, err := readCPUManagerState(fs, cpuManagerPath)
 		if err != nil {
@@ -165,22 +185,6 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 	}
 
 	totalMem := sumNodeMemTotals(nodes)
-
-	if jsonOut {
-		out := jsonTopoOutput{
-			TotalCPUs:        len(numaMap),
-			PhysicalCores:    len(allCores),
-			Sockets:          len(totalSockets),
-			TotalMemoryBytes: totalMem,
-			NUMANodes:        toJSONNodes(nodes, nil),
-			GPUs:             toJSONGPUs(gpus),
-		}
-		if cpuMgrState != nil {
-			out.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
-		}
-		printJSON(out)
-		return
-	}
 
 	fmt.Printf("\n%s\n\n", col(ansiBold, "numacheck — Machine Topology"))
 	printSection("Topology")
@@ -207,9 +211,47 @@ func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath 
 	}
 
 	fmt.Println()
+	return nil
 }
 
-func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOut bool, containerRes *crictlResources, cpuManagerPath string) {
+// buildTopoJSON gathers topology data and assembles the MachineTopology JSON envelope.
+// Returns an error only on unrecoverable failures (e.g., NUMA map unreadable). GPU and
+// CPU-manager errors are surfaced via warnf, matching the text path.
+func buildTopoJSON(fs FileSystem, cmd CommandRunner, cpuManagerPath string) (apiv1.MachineTopology, error) {
+	numaMap, err := buildNUMAMap(fs)
+	if err != nil {
+		return apiv1.MachineTopology{}, fmt.Errorf("reading NUMA topology: %v", err)
+	}
+
+	gpus, gpuErr := discoverGPUs(fs, cmd)
+	if gpuErr != nil {
+		warnf("GPU detection: %v", gpuErr)
+	}
+	nodes := buildNUMANodes(fs, numaMap, gpus)
+
+	var cpuMgrState *KubeletCPUManagerState
+	var cpuMgrEntries []KubeletCPUManagerEntry
+	if cpuManagerPath != "" {
+		state, err := readCPUManagerState(fs, cpuManagerPath)
+		if err != nil {
+			warnf("cpu manager: %v", err)
+		} else {
+			cpuMgrState = state
+			if state.PolicyName == "static" {
+				cpuMgrEntries = parseCPUManagerEntries(state)
+			}
+		}
+	}
+
+	return apiv1.MachineTopology{
+		APIVersion: "numacheck/v1",
+		Kind:       "MachineTopology",
+		Metadata:   buildMetadata(),
+		Machine:    buildMachine(fs, numaMap, nodes, gpus, cpuMgrState, cpuMgrEntries),
+	}, nil
+}
+
+func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOut bool, containerRes *crictlResources, cpuManagerPath string, pod, container string) {
 	affinityList, err := getCPUAffinity(pid)
 	if err != nil {
 		fatalf("getting CPU affinity: %v", err)
@@ -268,8 +310,8 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 		processMem = nil
 	}
 
-	var cpuMgrState *CPUManagerState
-	var cpuMgrEntries []CPUManagerEntry
+	var cpuMgrState *KubeletCPUManagerState
+	var cpuMgrEntries []KubeletCPUManagerEntry
 	if cpuManagerPath != "" {
 		state, err := readCPUManagerState(fs, cpuManagerPath)
 		if err != nil {
@@ -284,32 +326,42 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 
 	if jsonOut {
 		pinned := systemCPUErr == nil && len(affinityList) < systemCPUs
-		out := jsonProcessOutput{
-			PID:                pid,
-			AllowedCPUs:        affinityList,
-			Pinned:             pinned,
-			CurrentCPU:         currentCPU,
-			CurrentNUMA:        cpuNUMANode,
-			TotalMemoryBytes:   sumNodeMemTotals(nodes),
-			ProcessMemoryBytes: sumProcessMem(processMem),
-			NUMANodes:          toJSONNodes(nodes, processMem),
-			GPUs:               toJSONGPUs(gpus),
-			AllowedGPUs:        mapKeys(allowedGPUs),
+		md := buildMetadata()
+		md.PID = pid
+		md.Pod = pod
+		md.Container = container
+
+		if affinityList == nil {
+			affinityList = []int{}
+		}
+
+		out := apiv1.ProcessReport{
+			APIVersion: "numacheck/v1",
+			Kind:       "ProcessReport",
+			Metadata:   md,
+			Machine:    buildMachine(fs, numaMap, nodes, gpus, cpuMgrState, cpuMgrEntries),
+			Process: &apiv1.Process{
+				CurrentCPU:        currentCPU,
+				CurrentNUMANode:   cpuNUMANode,
+				AllowedCPUs:       affinityList,
+				AllowedCPUCount:   len(affinityList),
+				Pinned:            pinned,
+				MemoryBytes:       sumProcessMem(processMem),
+				AllowedGPUs:       mapKeys(allowedGPUs),
+				MemoryPerNUMANode: toAPIProcessMemPerNode(nodes, processMem),
+			},
 		}
 		if systemCPUErr == nil {
-			out.SystemCPUs = systemCPUs
+			out.Process.SystemCPUCount = systemCPUs
 		}
 		if containerRes != nil {
-			out.Resources = toJSONResources(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr))
+			out.Process.ContainerResources = toAPIResources(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr))
 		}
 		if showNumastat {
 			raw, err := cmd.Run("numastat", "-p", fmt.Sprintf("%d", pid))
 			if err == nil {
-				out.Numastat = strings.TrimSpace(string(raw))
+				out.Process.Numastat = strings.TrimSpace(string(raw))
 			}
-		}
-		if cpuMgrState != nil {
-			out.CPUManager = toJSONCPUManager(cpuMgrState, cpuMgrEntries, nodes)
 		}
 		printJSON(out)
 		return
@@ -413,45 +465,60 @@ func sumProcessMem(processMem map[int]int64) int64 {
 	return total
 }
 
-func toJSONNodes(nodes []NUMANodeInfo, processMem map[int]int64) []jsonNUMANode {
-	out := make([]jsonNUMANode, len(nodes))
+func toAPINodes(nodes []NUMANodeInfo) []apiv1.NUMANode {
+	out := make([]apiv1.NUMANode, len(nodes))
 	for i, n := range nodes {
-		out[i] = jsonNUMANode{
-			ID:            n.ID,
-			SocketID:      n.SocketID,
-			CPUs:          n.CPUs,
-			MemTotalBytes: n.MemTotalBytes,
-			MemFreeBytes:  n.MemFreeBytes,
+		jn := apiv1.NUMANode{
+			ID:       n.ID,
+			SocketID: n.SocketID,
+			CPUs:     n.CPUs,
 		}
-		if processMem != nil {
-			out[i].ProcessMemBytes = processMem[n.ID]
+		if n.MemTotalBytes != 0 || n.MemFreeBytes != 0 {
+			jn.Memory = &apiv1.Memory{TotalBytes: n.MemTotalBytes, FreeBytes: n.MemFreeBytes}
 		}
+		out[i] = jn
 	}
 	return out
 }
 
-func toJSONGPUs(gpus []GPUDevice) []jsonGPU {
+func toAPIProcessMemPerNode(nodes []NUMANodeInfo, processMem map[int]int64) []apiv1.ProcessMemPerNode {
+	if processMem == nil {
+		return nil
+	}
+	out := make([]apiv1.ProcessMemPerNode, 0, len(nodes))
+	for _, n := range nodes {
+		if b, ok := processMem[n.ID]; ok {
+			out = append(out, apiv1.ProcessMemPerNode{ID: n.ID, Bytes: b})
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func toAPIGPUs(gpus []GPUDevice) []apiv1.GPU {
 	if len(gpus) == 0 {
 		return nil
 	}
-	out := make([]jsonGPU, len(gpus))
+	out := make([]apiv1.GPU, len(gpus))
 	for i, g := range gpus {
-		out[i] = jsonGPU{Index: g.Index, UUID: g.UUID, PCIID: g.PCIID, NUMANode: g.NUMANode}
+		out[i] = apiv1.GPU{Index: g.Index, UUID: g.UUID, PCIID: g.PCIID, NUMANode: g.NUMANode}
 	}
 	return out
 }
 
-func toJSONResources(res crictlResources, gc int) *jsonResources {
-	jr := &jsonResources{}
+func toAPIResources(res crictlResources, gc int) *apiv1.Resources {
+	jr := &apiv1.Resources{}
 	hasContent := false
 	if res.CPUShares > 2 {
 		v := float64(res.CPUShares) / 1024
-		jr.CPURequest = &v
+		jr.CPURequestCores = &v
 		hasContent = true
 	}
 	if res.CPUQuota > 0 && res.CPUPeriod > 0 {
 		v := float64(res.CPUQuota) / float64(res.CPUPeriod)
-		jr.CPULimit = &v
+		jr.CPULimitCores = &v
 		hasContent = true
 	}
 	if res.MemoryLimitInBytes > 0 {
@@ -466,6 +533,51 @@ func toJSONResources(res crictlResources, gc int) *jsonResources {
 		return nil
 	}
 	return jr
+}
+
+func buildMachine(fs FileSystem, numaMap map[int]int, nodes []NUMANodeInfo, gpus []GPUDevice, cpuMgrState *KubeletCPUManagerState, cpuMgrEntries []KubeletCPUManagerEntry) apiv1.Machine {
+	allCores := make(map[CoreInfo]bool)
+	for cpu := range numaMap {
+		if info, err := getCPUTopology(fs, cpu); err == nil {
+			allCores[info] = true
+		}
+	}
+	totalSockets := make(map[int]bool)
+	for _, n := range nodes {
+		if n.SocketID >= 0 {
+			totalSockets[n.SocketID] = true
+		}
+	}
+
+	m := apiv1.Machine{
+		CPU: apiv1.CPUSummary{
+			Total:         len(numaMap),
+			PhysicalCores: len(allCores),
+			Sockets:       len(totalSockets),
+		},
+		NUMANodes: toAPINodes(nodes),
+		GPUs:      toAPIGPUs(gpus),
+	}
+	if total := sumNodeMemTotals(nodes); total != 0 {
+		m.Memory = &apiv1.Memory{TotalBytes: total}
+	}
+	if cpuMgrState != nil {
+		m.CPUManager = toAPICPUManager(cpuMgrState, cpuMgrEntries, nodes)
+	}
+	return m
+}
+
+func buildMetadata() apiv1.Metadata {
+	hostname, err := hostnameFn()
+	if err != nil {
+		slog.Debug("os.Hostname failed", "error", err)
+		hostname = ""
+	}
+	return apiv1.Metadata{
+		Timestamp:        nowFn().UTC().Format(time.RFC3339),
+		Host:             hostname,
+		NumacheckVersion: version,
+	}
 }
 
 func gpuCount(allowedGPUs map[string]bool, gpus []GPUDevice, envErr bool) int {

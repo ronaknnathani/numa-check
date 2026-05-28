@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	apiv1 "numacheck/api/v1"
 )
 
 // captureStdout runs fn while redirecting os.Stdout to a pipe and returns the captured output.
@@ -473,13 +475,17 @@ func TestRenderGPURows(t *testing.T) {
 }
 
 func TestJSONTopoOutputContainsMemory(t *testing.T) {
-	out := jsonTopoOutput{
-		TotalCPUs:        4,
-		PhysicalCores:    2,
-		Sockets:          1,
-		TotalMemoryBytes: 8 * 1024 * 1024 * 1024,
-		NUMANodes: []jsonNUMANode{
-			{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, MemTotalBytes: 8 * 1024 * 1024 * 1024, MemFreeBytes: 4 * 1024 * 1024 * 1024},
+	out := apiv1.MachineTopology{
+		APIVersion: "numacheck/v1",
+		Kind:       "MachineTopology",
+		Metadata:   apiv1.Metadata{Timestamp: "2026-05-25T19:30:00Z", NumacheckVersion: "test"},
+		Machine: apiv1.Machine{
+			CPU:    apiv1.CPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
+			Memory: &apiv1.Memory{TotalBytes: 8 * 1024 * 1024 * 1024},
+			NUMANodes: []apiv1.NUMANode{
+				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3},
+					Memory: &apiv1.Memory{TotalBytes: 8 * 1024 * 1024 * 1024, FreeBytes: 4 * 1024 * 1024 * 1024}},
+			},
 		},
 	}
 	data, err := json.Marshal(out)
@@ -487,7 +493,7 @@ func TestJSONTopoOutputContainsMemory(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	s := string(data)
-	for _, want := range []string{`"mem_total_bytes"`, `"mem_free_bytes"`, `"total_memory_bytes"`} {
+	for _, want := range []string{`"totalBytes"`, `"freeBytes"`, `"machine"`, `"memory"`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("JSON missing %s: %s", want, s)
 		}

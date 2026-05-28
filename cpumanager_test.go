@@ -10,7 +10,7 @@ func TestReadCPUManagerState(t *testing.T) {
 		name    string
 		files   map[string]string
 		path    string
-		want    *CPUManagerState
+		want    *KubeletCPUManagerState
 		wantErr bool
 	}{
 		{
@@ -19,7 +19,7 @@ func TestReadCPUManagerState(t *testing.T) {
 				"/var/lib/kubelet/cpu_manager_state": `{"policyName":"static","defaultCpuSet":"0-3","entries":{"pod-uid-1":{"container-a":"4-7"},"pod-uid-2":{"container-b":"8-11"}},"checksum":12345}`,
 			},
 			path: "/var/lib/kubelet/cpu_manager_state",
-			want: &CPUManagerState{
+			want: &KubeletCPUManagerState{
 				PolicyName:    "static",
 				DefaultCPUSet: "0-3",
 				Entries: map[string]map[string]string{
@@ -34,7 +34,7 @@ func TestReadCPUManagerState(t *testing.T) {
 				"/var/lib/kubelet/cpu_manager_state": `{"policyName":"none","defaultCpuSet":"0-15","entries":{}}`,
 			},
 			path: "/var/lib/kubelet/cpu_manager_state",
-			want: &CPUManagerState{
+			want: &KubeletCPUManagerState{
 				PolicyName:    "none",
 				DefaultCPUSet: "0-15",
 				Entries:       map[string]map[string]string{},
@@ -85,25 +85,25 @@ func TestReadCPUManagerState(t *testing.T) {
 func TestParseCPUManagerEntries(t *testing.T) {
 	tests := []struct {
 		name string
-		state *CPUManagerState
-		want  []CPUManagerEntry
+		state *KubeletCPUManagerState
+		want  []KubeletCPUManagerEntry
 	}{
 		{
 			name: "multiple entries sorted",
-			state: &CPUManagerState{
+			state: &KubeletCPUManagerState{
 				Entries: map[string]map[string]string{
 					"pod-uid-b": {"container-x": "8-11"},
 					"pod-uid-a": {"container-y": "4-7"},
 				},
 			},
-			want: []CPUManagerEntry{
+			want: []KubeletCPUManagerEntry{
 				{PodUID: "pod-uid-a", ContainerName: "container-y", CPUs: []int{4, 5, 6, 7}, CPUSetRaw: "4-7"},
 				{PodUID: "pod-uid-b", ContainerName: "container-x", CPUs: []int{8, 9, 10, 11}, CPUSetRaw: "8-11"},
 			},
 		},
 		{
 			name: "same pod multiple containers sorted by name",
-			state: &CPUManagerState{
+			state: &KubeletCPUManagerState{
 				Entries: map[string]map[string]string{
 					"pod-uid-1": {
 						"sidecar": "12-13",
@@ -111,21 +111,21 @@ func TestParseCPUManagerEntries(t *testing.T) {
 					},
 				},
 			},
-			want: []CPUManagerEntry{
+			want: []KubeletCPUManagerEntry{
 				{PodUID: "pod-uid-1", ContainerName: "main", CPUs: []int{4, 5, 6, 7}, CPUSetRaw: "4-7"},
 				{PodUID: "pod-uid-1", ContainerName: "sidecar", CPUs: []int{12, 13}, CPUSetRaw: "12-13"},
 			},
 		},
 		{
 			name: "empty entries",
-			state: &CPUManagerState{
+			state: &KubeletCPUManagerState{
 				Entries: map[string]map[string]string{},
 			},
 			want: nil,
 		},
 		{
 			name: "invalid CPU set skipped",
-			state: &CPUManagerState{
+			state: &KubeletCPUManagerState{
 				Entries: map[string]map[string]string{
 					"pod-uid-1": {
 						"good": "0-3",
@@ -133,7 +133,7 @@ func TestParseCPUManagerEntries(t *testing.T) {
 					},
 				},
 			},
-			want: []CPUManagerEntry{
+			want: []KubeletCPUManagerEntry{
 				{PodUID: "pod-uid-1", ContainerName: "good", CPUs: []int{0, 1, 2, 3}, CPUSetRaw: "0-3"},
 			},
 		},
@@ -149,12 +149,12 @@ func TestParseCPUManagerEntries(t *testing.T) {
 	}
 }
 
-func TestToJSONCPUManager(t *testing.T) {
-	state := &CPUManagerState{
+func TestToAPICPUManager(t *testing.T) {
+	state := &KubeletCPUManagerState{
 		PolicyName:    "static",
 		DefaultCPUSet: "0-3",
 	}
-	entries := []CPUManagerEntry{
+	entries := []KubeletCPUManagerEntry{
 		{PodUID: "pod-uid-1", ContainerName: "main", CPUs: []int{4, 5, 6, 7}},
 	}
 	nodes := []NUMANodeInfo{
@@ -162,7 +162,7 @@ func TestToJSONCPUManager(t *testing.T) {
 		{ID: 1, CPUs: []int{8, 9, 10, 11, 12, 13, 14, 15}},
 	}
 
-	got := toJSONCPUManager(state, entries, nodes)
+	got := toAPICPUManager(state, entries, nodes)
 	if got.PolicyName != "static" {
 		t.Errorf("PolicyName = %q, want %q", got.PolicyName, "static")
 	}
