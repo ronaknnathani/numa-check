@@ -47,7 +47,7 @@ numacheck -pod <pod> -container <container>
 ```
 $ numacheck -topo -json
 $ numacheck -pid 4521 -json
-$ numacheck -pod my-pod -container my-container -json -numastat
+$ numacheck -pod my-pod -container my-container -json
 ```
 
 The `-json` flag emits a versioned, k8s-style envelope (`apiVersion: numacheck/v1`) instead of the visual grid. Two kinds: `MachineTopology` for `-topo`, and `ProcessReport` for `-pid` / `-pod` + `-container`. Both carry an envelope (`apiVersion`, `kind`, `metadata`) and a `machine` block; `ProcessReport` adds a `process` block.
@@ -67,7 +67,6 @@ The `-json` flag emits a versioned, k8s-style envelope (`apiVersion: numacheck/v
 - `memoryBytes`, `memoryPerNumaNode[]` — process RSS in total and per NUMA node
 - `allowedGpus[]` — UUIDs of GPUs the process can access
 - `containerResources` (with `-pod`/`-container`) — `cpuRequestCores`, `cpuLimitCores`, `memoryLimitBytes`, `gpuCount`
-- `numastat` (with `-numastat`) — raw `numastat -p` text
 
 ### Using `numacheck` as a metrics source
 
@@ -102,13 +101,7 @@ Example `MachineTopology`:
 }
 ```
 
-**Include numastat memory stats:**
-
-```
-$ numacheck -pid 4521 -numastat
-```
-
 ## Requirements
 
 - Linux with `/proc` and `/sys`
-- Optional: `nvidia-smi` (GPU detection), `crictl` (container PID lookup), `numastat` (memory stats)
+- Optional: `nvidia-smi` (GPU detection), `crictl` (container PID lookup)
