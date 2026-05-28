@@ -267,4 +267,3 @@ func TestFormatBytes(t *testing.T) {
 		}
 	}
 }
-
