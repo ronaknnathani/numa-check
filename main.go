@@ -340,9 +340,7 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, jsonOut bool, contai
 			},
 		}
 		if containerRes != nil {
-			if c := buildContainer(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr)); c != nil {
-				proc.Container = c
-			}
+			proc.Container = buildContainer(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr))
 		}
 
 		out := apiv1.ProcessReport{
@@ -542,7 +540,7 @@ func buildContainer(res crictlResources, gc int) *apiv1.Container {
 		return nil
 	}
 
-	c := &apiv1.Container{Resources: apiv1.ContainerResources{}}
+	c := &apiv1.Container{}
 	if len(requests) > 0 {
 		c.Resources.Requests = requests
 	}
