@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"sort"
 
-	"numacheck/apiv1"
+	apiv1 "numacheck/api/v1"
 )
 
 func readCPUManagerState(fs FileSystem, path string) (*KubeletCPUManagerState, error) {

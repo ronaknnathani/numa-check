@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"numacheck/apiv1"
+	apiv1 "numacheck/api/v1"
 )
 
 var version = "dev"

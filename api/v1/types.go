@@ -1,8 +1,12 @@
-// Package apiv1 defines the wire types for numacheck's JSON output.
+// Package v1 defines the wire types for numacheck's JSON output.
 // Schema is versioned via the APIVersion field on top-level envelopes
 // (e.g., "numacheck/v1"). JSON field tags are part of the contract and
 // must not change without bumping the version.
-package apiv1
+//
+// Callers conventionally alias this package as `apiv1`:
+//
+//	import apiv1 "numacheck/api/v1"
+package v1
 
 type Metadata struct {
 	Timestamp        string `json:"timestamp"`

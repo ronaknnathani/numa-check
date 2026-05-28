@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"numacheck/apiv1"
+	apiv1 "numacheck/api/v1"
 )
 
 // helper: marshal v and unmarshal into a generic map for structural assertions.

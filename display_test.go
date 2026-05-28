@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"numacheck/apiv1"
+	apiv1 "numacheck/api/v1"
 )
 
 // captureStdout runs fn while redirecting os.Stdout to a pipe and returns the captured output.
