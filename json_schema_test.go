@@ -208,6 +208,12 @@ func TestBuildProcessMemory(t *testing.T) {
 				{ID: 2, Bytes: 300},
 			},
 		},
+		{
+			name:       "non-matching node ids still report bytes total",
+			processMem: map[int]int64{7: 100},
+			wantBytes:  100,
+			wantPer:    nil,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -275,6 +281,12 @@ func TestBuildContainer(t *testing.T) {
 			name:     "fractional cpu request renders as millicores",
 			res:      crictlResources{CPUShares: 512}, // 0.5 cores
 			wantReqs: apiv1.ResourceList{"cpu": "500m"},
+		},
+		{
+			name:     "no observed GPUs -> no nvidia.com/gpu limit",
+			res:      crictlResources{CPUShares: 1024},
+			gpuCount: 0,
+			wantReqs: apiv1.ResourceList{"cpu": "1"},
 		},
 	}
 	for _, tt := range tests {

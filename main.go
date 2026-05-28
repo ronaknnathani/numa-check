@@ -335,12 +335,12 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, jsonOut bool, contai
 			},
 			Affinity: apiv1.Affinity{
 				CPUs:   affinityList,
-				GPUs:   mapKeys(allowedGPUs),
+				GPUs:   sortedKeys(allowedGPUs),
 				Memory: buildProcessMemory(nodes, processMem),
 			},
 		}
 		if containerRes != nil {
-			proc.Container = buildContainer(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr))
+			proc.Container = buildContainer(*containerRes, allowedGPUCount(allowedGPUs))
 		}
 
 		out := apiv1.ProcessReport{
@@ -500,7 +500,8 @@ func toAPIGPUs(gpus []GPUDevice) []apiv1.GPU {
 }
 
 // buildProcessMemory returns a populated *ProcessMemory or nil when nothing
-// is observable.
+// is observable. Returns nil only when processMem is nil or empty; a non-nil
+// return may have an empty PerNUMANode if no node IDs matched.
 func buildProcessMemory(nodes []NUMANodeInfo, processMem map[int]int64) *apiv1.ProcessMemory {
 	if processMem == nil {
 		return nil
@@ -610,7 +611,16 @@ func gpuCount(allowedGPUs map[string]bool, gpus []GPUDevice, envErr bool) int {
 	return 0
 }
 
-func mapKeys(m map[string]bool) []string {
+// allowedGPUCount returns the number of GPUs we observed the container was
+// allowed to use. Returns 0 when allowedGPUs is nil (i.e., we couldn't read
+// the container's GPU env), avoiding over-attribution of host GPUs to the
+// container's nvidia.com/gpu limit.
+func allowedGPUCount(allowedGPUs map[string]bool) int {
+	return len(allowedGPUs)
+}
+
+// sortedKeys returns the map's keys in sorted order, or nil if the map is empty.
+func sortedKeys(m map[string]bool) []string {
 	if len(m) == 0 {
 		return nil
 	}
