@@ -267,36 +267,3 @@ func TestFormatBytes(t *testing.T) {
 		}
 	}
 }
-
-func TestRunNumastat(t *testing.T) {
-	t.Run("output is indented with 2 spaces", func(t *testing.T) {
-		numastatOutput := "Per-node process memory usage (in MBs) for PID 1234\n         Node 0   Node 1    Total\n         ------   ------    -----\nHuge      0.00     0.00      0.00\nHeap     10.00     0.00     10.00\n"
-
-		cmd := &mockCmd{calls: []mockCall{
-			{output: []byte(numastatOutput)},
-		}}
-
-		got, err := runNumastat(cmd, 1234)
-		if err != nil {
-			t.Fatalf("runNumastat() unexpected error: %v", err)
-		}
-
-		lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
-		for i, line := range lines {
-			if !strings.HasPrefix(line, "  ") {
-				t.Errorf("line %d not indented with 2 spaces: %q", i, line)
-			}
-		}
-	})
-
-	t.Run("numastat error", func(t *testing.T) {
-		cmd := &mockCmd{calls: []mockCall{
-			{err: fmt.Errorf("numastat not found")},
-		}}
-
-		_, err := runNumastat(cmd, 1234)
-		if err == nil {
-			t.Error("runNumastat() expected error")
-		}
-	})
-}

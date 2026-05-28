@@ -34,7 +34,6 @@ go test -cover ./...
 numacheck -topo                                    # machine topology only (no PID)
 numacheck -pid <PID>                               # process NUMA analysis
 numacheck -pod <pod-name> -container <container-name>
-numacheck -pid <PID> -numastat                     # numastat memory stats
 numacheck -pid <PID> -debug                        # with debug logging
 numacheck -topo -cpumanager /var/lib/kubelet/cpu_manager_state  # CPU manager assignments
 numacheck -pid <PID> -cpumanager /var/lib/kubelet/cpu_manager_state
@@ -52,7 +51,7 @@ Single package (`package main`), split across files by concern:
 | `sysfs_linux.go` | Linux-only: `getCPUAffinity` via `unix.SchedGetaffinity` |
 | `sysfs_stub.go` | Non-Linux stub for `getCPUAffinity` |
 | `cpumanager.go` | Kubelet CPU manager state file reader |
-| `commands.go` | External command wrappers (nvidia-smi, crictl, numastat) |
+| `commands.go` | External command wrappers (nvidia-smi, crictl) |
 | `topology.go` | Data assembly, GPU discovery (2-phase: PCI + nvidia-smi) |
 | `display.go` | Grid rendering, ANSI colors, formatting |
 | `parse.go` | CPU list parsing, PCI ID normalization |
@@ -74,13 +73,12 @@ Functions accept `FileSystem` and `CommandRunner` interfaces instead of calling 
 | GPU UUID/PCI mapping | `nvidia-smi` (only when PCI detection finds NVIDIA devices) |
 | GPU NUMA node | `/sys/bus/pci/devices/<pciID>/numa_node` |
 | Container PID | `crictl` (only with `-pod`/`-container` flags) |
-| NUMA memory stats | `numastat` (only with `-numastat` flag) |
 | CPU manager state | `{kubelet-root}/cpu_manager_state` (only with `-cpumanager` flag) |
 
 ### Output modes
 
 - **`-topo`** — machine topology: CPU grid per NUMA node + GPU placement
-- **`-pid`/`-pod`** — process analysis: CPU placement overlay, optional numastat
+- **`-pid`/`-pod`** — process analysis: CPU placement overlay
 
 Output uses ANSI colors when stdout is a TTY. Respects `NO_COLOR` env var.
 

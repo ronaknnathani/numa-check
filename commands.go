@@ -118,18 +118,3 @@ func formatBytes(b int64) string {
 		return fmt.Sprintf("%d B", b)
 	}
 }
-
-func runNumastat(cmd CommandRunner, pid int) (string, error) {
-	slog.Debug("running numastat", "pid", pid)
-	out, err := cmd.Run("numastat", "-p", fmt.Sprintf("%d", pid))
-	if err != nil {
-		return "", execStderr(err)
-	}
-	var sb strings.Builder
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
-		sb.WriteString("  ")
-		sb.WriteString(line)
-		sb.WriteString("\n")
-	}
-	return sb.String(), nil
-}

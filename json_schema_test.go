@@ -126,7 +126,6 @@ func TestProcessReportJSONSchema(t *testing.T) {
 				MemoryLimitBytes: &limit,
 				GPUCount:         1,
 			},
-			Numastat: "raw numastat output",
 		},
 	}
 
@@ -143,7 +142,6 @@ func TestProcessReportJSONSchema(t *testing.T) {
 		"process.systemCpuCount":                      float64(4),
 		"process.pinned":                              false,
 		"process.memoryBytes":                         float64(2 << 30),
-		"process.numastat":                            "raw numastat output",
 		"process.containerResources.cpuRequestCores":  float64(4),
 		"process.containerResources.cpuLimitCores":    float64(8),
 		"process.containerResources.memoryLimitBytes": float64(16 << 30),
@@ -270,7 +268,7 @@ func TestProcessReportOmitsAbsentSections(t *testing.T) {
 	mustOmit := []string{
 		`"pod"`, `"container"`,
 		`"gpus"`, `"cpuManager"`,
-		`"containerResources"`, `"numastat"`,
+		`"containerResources"`,
 		`"memoryPerNumaNode"`, `"allowedGpus"`,
 		`"memoryBytes"`,
 	}

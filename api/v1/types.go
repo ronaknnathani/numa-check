@@ -93,7 +93,6 @@ type Process struct {
 	AllowedGPUs        []string            `json:"allowedGpus,omitempty"`
 	MemoryPerNUMANode  []ProcessMemPerNode `json:"memoryPerNumaNode,omitempty"`
 	ContainerResources *Resources          `json:"containerResources,omitempty"`
-	Numastat           string              `json:"numastat,omitempty"`
 }
 
 type MachineTopology struct {
