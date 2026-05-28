@@ -24,7 +24,6 @@ type config struct {
 	pid        int
 	pod        string
 	container  string
-	numastat   bool
 	topoOnly   bool
 	debug      bool
 	jsonOut    bool
@@ -47,7 +46,6 @@ func main() {
 	flag.IntVar(&cfg.pid, "pid", 0, "process ID to analyze")
 	flag.StringVar(&cfg.pod, "pod", "", "pod name (requires -container)")
 	flag.StringVar(&cfg.container, "container", "", "container name (requires -pod)")
-	flag.BoolVar(&cfg.numastat, "numastat", false, "include numastat memory stats")
 	flag.BoolVar(&cfg.topoOnly, "topo", false, "machine topology only (no PID required)")
 	flag.BoolVar(&cfg.debug, "debug", false, "enable debug logging")
 	flag.BoolVar(&cfg.jsonOut, "json", false, "output in JSON format")
@@ -64,7 +62,6 @@ Examples:
   numacheck -topo                              machine topology only
   numacheck -pid 12345                         analyze a process
   numacheck -pod mypod -container mycontainer  analyze a container
-  numacheck -pid 12345 -numastat               include NUMA memory stats
   numacheck -pid 12345 -json                   JSON output
   numacheck -topo -cpumanager /var/lib/kubelet/cpu_manager_state
 `)
@@ -86,9 +83,6 @@ Examples:
 		fatalf("unexpected arguments: %s", strings.Join(flag.Args(), " "))
 	}
 
-	if cfg.topoOnly && cfg.numastat {
-		fatalf("-numastat cannot be used with -topo")
-	}
 	if cfg.topoOnly && cfg.pid != 0 {
 		fatalf("-pid cannot be used with -topo")
 	}
@@ -125,14 +119,11 @@ Examples:
 		pid = info.PID
 		containerRes = &info.Resources
 	default:
-		if cfg.numastat {
-			fatalf("-numastat requires -pid or -pod/-container")
-		}
 		flag.Usage()
 		os.Exit(1)
 	}
 
-	runAnalysis(fs, cmd, pid, cfg.numastat, cfg.jsonOut, containerRes, cfg.cpuManager, cfg.pod, cfg.container)
+	runAnalysis(fs, cmd, pid, cfg.jsonOut, containerRes, cfg.cpuManager, cfg.pod, cfg.container)
 }
 
 func runTopoOnly(fs FileSystem, cmd CommandRunner, jsonOut bool, cpuManagerPath string) error {
@@ -251,7 +242,7 @@ func buildTopoJSON(fs FileSystem, cmd CommandRunner, cpuManagerPath string) (api
 	}, nil
 }
 
-func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOut bool, containerRes *crictlResources, cpuManagerPath string, pod, container string) {
+func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, jsonOut bool, containerRes *crictlResources, cpuManagerPath string, pod, container string) {
 	affinityList, err := getCPUAffinity(pid)
 	if err != nil {
 		fatalf("getting CPU affinity: %v", err)
@@ -357,12 +348,6 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 		if containerRes != nil {
 			out.Process.ContainerResources = toAPIResources(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr))
 		}
-		if showNumastat {
-			raw, err := cmd.Run("numastat", "-p", fmt.Sprintf("%d", pid))
-			if err == nil {
-				out.Process.Numastat = strings.TrimSpace(string(raw))
-			}
-		}
 		printJSON(out)
 		return
 	}
@@ -429,17 +414,6 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, showNumastat, jsonOu
 			fmt.Printf("  CPU Manager policy is %q — CPUs are not exclusively assigned to containers\n", cpuMgrState.PolicyName)
 		} else {
 			printCPUManagerSection(cpuMgrState, cpuMgrEntries, nodes)
-		}
-	}
-
-	if showNumastat {
-		fmt.Println()
-		out, err := runNumastat(cmd, pid)
-		if err != nil {
-			warnf("numastat: %v", err)
-		} else {
-			printSection("NUMA Memory Stats")
-			fmt.Print(out)
 		}
 	}
 
