@@ -327,6 +327,7 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, jsonOut bool, contai
 			affinityList = []int{}
 		}
 
+		aligned, alignedNode := numaAlignment(affinityList, numaMap, allowedGPUs, gpus)
 		proc := apiv1.Process{
 			Placement: apiv1.Placement{
 				CurrentCPU:      currentCPU,
@@ -334,9 +335,11 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, jsonOut bool, contai
 				Pinned:          pinned,
 			},
 			Affinity: apiv1.Affinity{
-				CPUs:   affinityList,
-				GPUs:   sortedKeys(allowedGPUs),
-				Memory: buildProcessMemory(nodes, processMem),
+				CPUs:        affinityList,
+				GPUs:        sortedKeys(allowedGPUs),
+				Memory:      buildProcessMemory(nodes, processMem),
+				NUMAAligned: aligned,
+				NUMANode:    alignedNode,
 			},
 		}
 		if containerRes != nil {
@@ -497,6 +500,38 @@ func toAPIGPUs(gpus []GPUDevice) []apiv1.GPU {
 		out[i] = apiv1.GPU{Index: g.Index, UUID: g.UUID, PCIID: g.PCIID, NUMANode: g.NUMANode}
 	}
 	return out
+}
+
+// numaAlignment reports whether every allowed CPU and every allowed GPU
+// resides on the same NUMA node. When aligned, returns (true, &node);
+// otherwise (false, nil). allowedGPUs == nil means we couldn't read the
+// container's GPU env, so GPUs are skipped and alignment is decided on CPUs
+// alone.
+func numaAlignment(allowedCPUs []int, numaMap map[int]int, allowedGPUs map[string]bool, gpus []GPUDevice) (bool, *int) {
+	if len(allowedCPUs) == 0 {
+		return false, nil
+	}
+	node, ok := numaMap[allowedCPUs[0]]
+	if !ok {
+		return false, nil
+	}
+	for _, cpu := range allowedCPUs[1:] {
+		if n, ok := numaMap[cpu]; !ok || n != node {
+			return false, nil
+		}
+	}
+	if allowedGPUs != nil {
+		gpuNode := make(map[string]int, len(gpus))
+		for _, g := range gpus {
+			gpuNode[g.UUID] = g.NUMANode
+		}
+		for uuid := range allowedGPUs {
+			if n, ok := gpuNode[uuid]; !ok || n != node {
+				return false, nil
+			}
+		}
+	}
+	return true, &node
 }
 
 // buildProcessMemory returns a populated *ProcessMemory or nil when nothing

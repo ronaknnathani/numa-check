@@ -65,6 +65,7 @@ The `-json` flag emits a versioned, k8s-style envelope (`apiVersion: numacheck/v
 - `placement` — `currentCpu`, `currentNumaNode`, `pinned`
 - `affinity.cpus`, `affinity.gpus` — CPUs (cpuset) and GPU UUIDs the process can access
 - `affinity.memory.bytes`, `affinity.memory.perNumaNode[]` — process RSS in total and per NUMA node
+- `affinity.numaAligned`, `affinity.numaNode` — `numaAligned` is `true` iff every allowed CPU and every allowed GPU live on the same NUMA node; `numaNode` carries that node's ID when aligned and is omitted otherwise. When the container's GPU env isn't observable, alignment is decided on CPUs alone.
 - `container.resources` (with `-pod`/`-container`) — k8s-shaped `requests`/`limits` map of `cpu`, `memory`, `nvidia.com/gpu` to `resource.Quantity` strings
 
 Note: `ProcessReport` does not include a `machine` block — run `numacheck -topo -json` for host topology. A metrics agent typically polls `-topo` once per host and `-pod`/`-pid` per workload.
@@ -74,7 +75,7 @@ Note: `ProcessReport` does not include a `machine` block — run `numacheck -top
 The schema is designed to plug into a host-level metrics agent that runs `numacheck -topo -json` periodically and `numacheck -pod ... -container ... -json` per pod/container, then emits dimensional metrics. Everything under `metadata` (host, pod, container, pid) maps directly to metric labels; everything else is a measurement. Useful derivable metrics:
 
 - **Machine topology** — CPUs/cores/sockets per host; memory total/free per NUMA node; GPU count per NUMA node.
-- **Container NUMA alignment** — whether `affinity.cpus` is confined to a single NUMA node, whether `affinity.gpus` are co-located with those CPUs, and what fraction of `affinity.memory.bytes` lives on the same NUMA node as the allowed CPUs (derived from `affinity.memory.perNumaNode[]`).
+- **Container NUMA alignment** — `affinity.numaAligned` reports whether allowed CPUs and GPUs share one NUMA node; `affinity.numaNode` gives that node's ID. For finer-grained signal, compare against `affinity.memory.perNumaNode[]` to see what fraction of RSS lives on that node.
 - **CPU pinning** — `len(affinity.cpus) / resources.cpu.logicalCores` per container (using host topology from `-topo`); per-node `exclusiveCpus / totalCpus` from `cpuManager.perNumaNode[]` for capacity planning.
 - **Resource fit** — `affinity.memory.bytes` parsed against `container.resources.limits.memory`.
 
@@ -133,7 +134,9 @@ Example `ProcessReport`:
         "memory": {
           "bytes": 2147483648,
           "perNumaNode": [ { "id": 0, "bytes": 2147483648 } ]
-        }
+        },
+        "numaAligned": true,
+        "numaNode": 0
       },
       "container": {
         "resources": {

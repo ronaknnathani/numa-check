@@ -92,9 +92,11 @@ type ProcessMemory struct {
 }
 
 type Affinity struct {
-	CPUs   []int          `json:"cpus"`
-	GPUs   []string       `json:"gpus,omitempty"`
-	Memory *ProcessMemory `json:"memory,omitempty"`
+	CPUs        []int          `json:"cpus"`
+	GPUs        []string       `json:"gpus,omitempty"`
+	Memory      *ProcessMemory `json:"memory,omitempty"`
+	NUMAAligned bool           `json:"numaAligned"`
+	NUMANode    *int           `json:"numaNode,omitempty"`
 }
 
 // ResourceList mirrors k8s ResourceList: a map of resource name to a

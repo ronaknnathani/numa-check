@@ -122,6 +122,8 @@ func TestProcessReportJSONSchema(t *testing.T) {
 						Bytes:       2 << 30,
 						PerNUMANode: []apiv1.ProcessMemPerNode{{ID: 0, Bytes: 2 << 30}},
 					},
+					NUMAAligned: true,
+					NUMANode:    intPtr(0),
 				},
 				Container: &apiv1.Container{
 					Resources: apiv1.ContainerResources{
@@ -148,6 +150,8 @@ func TestProcessReportJSONSchema(t *testing.T) {
 		"data.process.placement.currentNumaNode": float64(0),
 		"data.process.placement.pinned":          false,
 		"data.process.affinity.memory.bytes":     float64(2 << 30),
+		"data.process.affinity.numaAligned":      true,
+		"data.process.affinity.numaNode":         float64(0),
 	}
 	for path, want := range checks {
 		if got := getPath(m, path); got != want {
@@ -457,6 +461,101 @@ func TestRunTopoOnlyJSONWiring(t *testing.T) {
 	}
 	if _, present := node0["gpus"]; present {
 		t.Errorf("numaNodes[0].gpus should be omitted when no GPUs; got present in %s", out)
+	}
+}
+
+func intPtr(v int) *int { return &v }
+
+func TestNUMAAlignment(t *testing.T) {
+	numaMap := map[int]int{
+		0: 0, 1: 0, 2: 0, 3: 0,
+		4: 1, 5: 1, 6: 1, 7: 1,
+	}
+	gpus := []GPUDevice{
+		{Index: 0, UUID: "GPU-node0", NUMANode: 0},
+		{Index: 1, UUID: "GPU-node1", NUMANode: 1},
+	}
+
+	tests := []struct {
+		name        string
+		allowedCPUs []int
+		allowedGPUs map[string]bool
+		wantAligned bool
+		wantNode    *int
+	}{
+		{
+			name:        "empty allowed CPUs",
+			allowedCPUs: []int{},
+			wantAligned: false,
+		},
+		{
+			name:        "all CPUs on node 0, no GPU env",
+			allowedCPUs: []int{0, 1, 2, 3},
+			allowedGPUs: nil,
+			wantAligned: true,
+			wantNode:    intPtr(0),
+		},
+		{
+			name:        "all CPUs on node 1, no GPU env",
+			allowedCPUs: []int{4, 5, 6, 7},
+			allowedGPUs: nil,
+			wantAligned: true,
+			wantNode:    intPtr(1),
+		},
+		{
+			name:        "CPUs spread across nodes",
+			allowedCPUs: []int{0, 1, 4, 5},
+			allowedGPUs: nil,
+			wantAligned: false,
+		},
+		{
+			name:        "CPUs on node 0, allowed GPU on node 0",
+			allowedCPUs: []int{0, 1},
+			allowedGPUs: map[string]bool{"GPU-node0": true},
+			wantAligned: true,
+			wantNode:    intPtr(0),
+		},
+		{
+			name:        "CPUs on node 0, allowed GPU on node 1",
+			allowedCPUs: []int{0, 1},
+			allowedGPUs: map[string]bool{"GPU-node1": true},
+			wantAligned: false,
+		},
+		{
+			name:        "CPUs aligned, no GPUs allowed (empty set)",
+			allowedCPUs: []int{0, 1},
+			allowedGPUs: map[string]bool{},
+			wantAligned: true,
+			wantNode:    intPtr(0),
+		},
+		{
+			name:        "CPU not in numaMap",
+			allowedCPUs: []int{99},
+			wantAligned: false,
+		},
+		{
+			name:        "allowed GPU UUID not in host gpus",
+			allowedCPUs: []int{0},
+			allowedGPUs: map[string]bool{"GPU-unknown": true},
+			wantAligned: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			aligned, node := numaAlignment(tt.allowedCPUs, numaMap, tt.allowedGPUs, gpus)
+			if aligned != tt.wantAligned {
+				t.Errorf("aligned = %v, want %v", aligned, tt.wantAligned)
+			}
+			switch {
+			case tt.wantNode == nil && node != nil:
+				t.Errorf("node = %v, want nil", *node)
+			case tt.wantNode != nil && node == nil:
+				t.Errorf("node = nil, want %v", *tt.wantNode)
+			case tt.wantNode != nil && node != nil && *node != *tt.wantNode:
+				t.Errorf("node = %v, want %v", *node, *tt.wantNode)
+			}
+		})
 	}
 }
 
