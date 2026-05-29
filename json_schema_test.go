@@ -9,7 +9,6 @@ import (
 	apiv1 "numacheck/api/v1"
 )
 
-// helper: marshal v and unmarshal into a generic map for structural assertions.
 func toMap(t *testing.T, v any) map[string]any {
 	t.Helper()
 	data, err := json.Marshal(v)
@@ -23,7 +22,6 @@ func toMap(t *testing.T, v any) map[string]any {
 	return m
 }
 
-// getPath looks up a dotted path through nested maps. Returns nil if any segment is missing.
 func getPath(m map[string]any, path string) any {
 	parts := strings.Split(path, ".")
 	var cur any = m
@@ -46,34 +44,38 @@ func TestMachineTopologyJSONSchema(t *testing.T) {
 			Host:             "node-foo",
 			NumacheckVersion: "v0.5.0",
 		},
-		Machine: apiv1.Machine{
-			CPU:    apiv1.CPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
-			Memory: &apiv1.Memory{TotalBytes: 8 << 30},
+		Data: apiv1.MachineData{
+			Resources: apiv1.MachineResources{
+				CPU:    apiv1.CPU{LogicalCores: 4, PhysicalCores: 2, Sockets: 1},
+				Memory: &apiv1.Memory{TotalBytes: 8 << 30, FreeBytes: 4 << 30},
+				GPUs:   []apiv1.GPU{{Index: 0, UUID: "GPU-abc", PCIID: "0000:17:00.0", NUMANode: 0}},
+			},
 			NUMANodes: []apiv1.NUMANode{
-				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, Memory: &apiv1.Memory{TotalBytes: 8 << 30, FreeBytes: 4 << 30}},
+				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, GPUs: []int{0}, Memory: &apiv1.Memory{TotalBytes: 8 << 30, FreeBytes: 4 << 30}},
 			},
 		},
 	}
 
 	m := toMap(t, out)
 	checks := map[string]any{
-		"apiVersion":                "numacheck/v1",
-		"kind":                      "MachineTopology",
-		"metadata.timestamp":        "2026-05-25T19:30:00Z",
-		"metadata.host":             "node-foo",
-		"metadata.numacheckVersion": "v0.5.0",
-		"machine.cpu.total":         float64(4),
-		"machine.cpu.physicalCores": float64(2),
-		"machine.cpu.sockets":       float64(1),
-		"machine.memory.totalBytes": float64(8 << 30),
+		"apiVersion":                       "numacheck/v1",
+		"kind":                             "MachineTopology",
+		"metadata.timestamp":               "2026-05-25T19:30:00Z",
+		"metadata.host":                    "node-foo",
+		"metadata.numacheckVersion":        "v0.5.0",
+		"data.resources.cpu.logicalCores":  float64(4),
+		"data.resources.cpu.physicalCores": float64(2),
+		"data.resources.cpu.sockets":       float64(1),
+		"data.resources.memory.totalBytes": float64(8 << 30),
+		"data.resources.memory.freeBytes":  float64(4 << 30),
 	}
 	for path, want := range checks {
 		if got := getPath(m, path); got != want {
 			t.Errorf("%s = %v (%T), want %v (%T)", path, got, got, want, want)
 		}
 	}
-	// numaNodes[0].memory.totalBytes
-	nodes, _ := getPath(m, "machine.numaNodes").([]any)
+
+	nodes, _ := getPath(m, "data.numaNodes").([]any)
 	if len(nodes) != 1 {
 		t.Fatalf("expected 1 numaNode, got %d", len(nodes))
 	}
@@ -81,14 +83,24 @@ func TestMachineTopologyJSONSchema(t *testing.T) {
 	if got := getPath(node0, "memory.totalBytes"); got != float64(8<<30) {
 		t.Errorf("numaNodes[0].memory.totalBytes = %v", got)
 	}
-	if got := getPath(node0, "socketId"); got != float64(0) {
+	if got := node0["socketId"]; got != float64(0) {
 		t.Errorf("numaNodes[0].socketId = %v", got)
+	}
+	gpus, _ := node0["gpus"].([]any)
+	if len(gpus) != 1 || gpus[0] != float64(0) {
+		t.Errorf("numaNodes[0].gpus = %v, want [0]", gpus)
+	}
+
+	machineGpus, _ := getPath(m, "data.resources.gpus").([]any)
+	if len(machineGpus) != 1 {
+		t.Fatalf("expected 1 GPU under data.resources.gpus, got %d", len(machineGpus))
+	}
+	if got := machineGpus[0].(map[string]any)["pciId"]; got != "0000:17:00.0" {
+		t.Errorf("data.resources.gpus[0].pciId = %v", got)
 	}
 }
 
 func TestProcessReportJSONSchema(t *testing.T) {
-	limit := int64(16 << 30)
-	cpuReq, cpuLim := 4.0, 8.0
 	out := apiv1.ProcessReport{
 		APIVersion: "numacheck/v1",
 		Kind:       "ProcessReport",
@@ -100,52 +112,46 @@ func TestProcessReportJSONSchema(t *testing.T) {
 			Pod:              "my-pod",
 			Container:        "my-container",
 		},
-		Machine: apiv1.Machine{
-			CPU:    apiv1.CPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
-			Memory: &apiv1.Memory{TotalBytes: 8 << 30},
-			NUMANodes: []apiv1.NUMANode{
-				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3}, Memory: &apiv1.Memory{TotalBytes: 8 << 30}},
-			},
-			GPUs: []apiv1.GPU{{Index: 0, UUID: "GPU-abc", PCIID: "0000:17:00.0", NUMANode: 0}},
-		},
-		Process: &apiv1.Process{
-			CurrentCPU:      2,
-			CurrentNUMANode: 0,
-			AllowedCPUs:     []int{0, 1, 2, 3},
-			AllowedCPUCount: 4,
-			SystemCPUCount:  4,
-			Pinned:          false,
-			MemoryBytes:     2 << 30,
-			AllowedGPUs:     []string{"GPU-abc"},
-			MemoryPerNUMANode: []apiv1.ProcessMemPerNode{
-				{ID: 0, Bytes: 2 << 30},
-			},
-			ContainerResources: &apiv1.Resources{
-				CPURequestCores:  &cpuReq,
-				CPULimitCores:    &cpuLim,
-				MemoryLimitBytes: &limit,
-				GPUCount:         1,
+		Data: apiv1.ProcessData{
+			Process: apiv1.Process{
+				Placement: apiv1.Placement{CurrentCPU: 2, CurrentNUMANode: 0, Pinned: false},
+				Affinity: apiv1.Affinity{
+					CPUs: []int{0, 1, 2, 3},
+					GPUs: []string{"GPU-abc"},
+					Memory: &apiv1.ProcessMemory{
+						Bytes:       2 << 30,
+						PerNUMANode: []apiv1.ProcessMemPerNode{{ID: 0, Bytes: 2 << 30}},
+					},
+					NUMAAligned: true,
+					NUMANode:    intPtr(0),
+				},
+				Container: &apiv1.Container{
+					Resources: apiv1.ContainerResources{
+						Requests: apiv1.ResourceList{"cpu": "4"},
+						Limits: apiv1.ResourceList{
+							"cpu":            "8",
+							"memory":         "16Gi",
+							"nvidia.com/gpu": "1",
+						},
+					},
+				},
 			},
 		},
 	}
 
 	m := toMap(t, out)
 	checks := map[string]any{
-		"apiVersion":                                  "numacheck/v1",
-		"kind":                                        "ProcessReport",
-		"metadata.pid":                                float64(12345),
-		"metadata.pod":                                "my-pod",
-		"metadata.container":                          "my-container",
-		"process.currentCpu":                          float64(2),
-		"process.currentNumaNode":                     float64(0),
-		"process.allowedCpuCount":                     float64(4),
-		"process.systemCpuCount":                      float64(4),
-		"process.pinned":                              false,
-		"process.memoryBytes":                         float64(2 << 30),
-		"process.containerResources.cpuRequestCores":  float64(4),
-		"process.containerResources.cpuLimitCores":    float64(8),
-		"process.containerResources.memoryLimitBytes": float64(16 << 30),
-		"process.containerResources.gpuCount":         float64(1),
+		"apiVersion":                             "numacheck/v1",
+		"kind":                                   "ProcessReport",
+		"metadata.pid":                           float64(12345),
+		"metadata.pod":                           "my-pod",
+		"metadata.container":                     "my-container",
+		"data.process.placement.currentCpu":      float64(2),
+		"data.process.placement.currentNumaNode": float64(0),
+		"data.process.placement.pinned":          false,
+		"data.process.affinity.memory.bytes":     float64(2 << 30),
+		"data.process.affinity.numaAligned":      true,
+		"data.process.affinity.numaNode":         float64(0),
 	}
 	for path, want := range checks {
 		if got := getPath(m, path); got != want {
@@ -153,84 +159,184 @@ func TestProcessReportJSONSchema(t *testing.T) {
 		}
 	}
 
-	gpus, ok := getPath(m, "machine.gpus").([]any)
-	if !ok || len(gpus) != 1 {
-		t.Fatalf("expected 1 gpu, got %v", gpus)
+	cpus, _ := getPath(m, "data.process.affinity.cpus").([]any)
+	if len(cpus) != 4 {
+		t.Fatalf("expected 4 cpus, got %v", cpus)
 	}
-	gpu0 := gpus[0].(map[string]any)
-	if got := gpu0["pciId"]; got != "0000:17:00.0" {
-		t.Errorf("machine.gpus[0].pciId = %v", got)
-	}
-	if got := gpu0["numaNode"]; got != float64(0) {
-		t.Errorf("machine.gpus[0].numaNode = %v", got)
+	gpus, _ := getPath(m, "data.process.affinity.gpus").([]any)
+	if len(gpus) != 1 || gpus[0] != "GPU-abc" {
+		t.Errorf("affinity.gpus = %v, want [GPU-abc]", gpus)
 	}
 
-	memNodes, _ := getPath(m, "process.memoryPerNumaNode").([]any)
+	reqs, _ := getPath(m, "data.process.container.resources.requests").(map[string]any)
+	if reqs["cpu"] != "4" {
+		t.Errorf("requests.cpu = %v, want \"4\"", reqs["cpu"])
+	}
+	lims, _ := getPath(m, "data.process.container.resources.limits").(map[string]any)
+	if lims["cpu"] != "8" || lims["memory"] != "16Gi" || lims["nvidia.com/gpu"] != "1" {
+		t.Errorf("limits = %v, want {cpu:8, memory:16Gi, nvidia.com/gpu:1}", lims)
+	}
+
+	memNodes, _ := getPath(m, "data.process.affinity.memory.perNumaNode").([]any)
 	if len(memNodes) != 1 {
 		t.Fatalf("expected 1 memoryPerNumaNode, got %d", len(memNodes))
 	}
 	node0 := memNodes[0].(map[string]any)
 	if node0["id"] != float64(0) || node0["bytes"] != float64(2<<30) {
-		t.Errorf("memoryPerNumaNode[0] = %v", node0)
+		t.Errorf("perNumaNode[0] = %v", node0)
 	}
 }
 
-func TestToAPIProcessMemPerNode(t *testing.T) {
-	nodes := []NUMANodeInfo{
-		{ID: 0},
-		{ID: 1},
-		{ID: 2},
-	}
+func TestBuildProcessMemory(t *testing.T) {
+	nodes := []NUMANodeInfo{{ID: 0}, {ID: 1}, {ID: 2}}
 	tests := []struct {
 		name       string
 		processMem map[int]int64
-		want       []apiv1.ProcessMemPerNode
+		wantNil    bool
+		wantBytes  int64
+		wantPer    []apiv1.ProcessMemPerNode
 	}{
+		{name: "nil returns nil", processMem: nil, wantNil: true},
 		{
-			name:       "nil processMem returns nil",
-			processMem: nil,
-			want:       nil,
-		},
-		{
-			name:       "no matching node ids returns nil",
-			processMem: map[int]int64{7: 100, 9: 200},
-			want:       nil,
+			name:       "no matching node ids returns nil (zero totals)",
+			processMem: map[int]int64{},
+			wantNil:    true,
 		},
 		{
 			name:       "populated returns entries in node order",
 			processMem: map[int]int64{2: 300, 0: 100, 1: 200},
-			want: []apiv1.ProcessMemPerNode{
+			wantBytes:  600,
+			wantPer: []apiv1.ProcessMemPerNode{
 				{ID: 0, Bytes: 100},
 				{ID: 1, Bytes: 200},
 				{ID: 2, Bytes: 300},
 			},
 		},
+		{
+			name:       "non-matching node ids still report bytes total",
+			processMem: map[int]int64{7: 100},
+			wantBytes:  100,
+			wantPer:    nil,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := toAPIProcessMemPerNode(nodes, tt.processMem)
-			if len(got) != len(tt.want) {
-				t.Fatalf("len = %d, want %d (got=%v)", len(got), len(tt.want), got)
+			got := buildProcessMemory(nodes, tt.processMem)
+			if tt.wantNil {
+				if got != nil {
+					t.Fatalf("got = %+v, want nil", got)
+				}
+				return
 			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("entry[%d] = %+v, want %+v", i, got[i], tt.want[i])
+			if got == nil {
+				t.Fatal("got = nil, want non-nil")
+			}
+			if got.Bytes != tt.wantBytes {
+				t.Errorf("bytes = %d, want %d", got.Bytes, tt.wantBytes)
+			}
+			if len(got.PerNUMANode) != len(tt.wantPer) {
+				t.Fatalf("perNode len = %d, want %d (got=%v)", len(got.PerNUMANode), len(tt.wantPer), got.PerNUMANode)
+			}
+			for i := range got.PerNUMANode {
+				if got.PerNUMANode[i] != tt.wantPer[i] {
+					t.Errorf("entry[%d] = %+v, want %+v", i, got.PerNUMANode[i], tt.wantPer[i])
 				}
 			}
 		})
 	}
 }
 
-// TestProcessAllowedCPUsEmptyMarshalsAsArray pins the contract that an
-// empty AllowedCPUs slice marshals to `[]`, not `null`.
-func TestProcessAllowedCPUsEmptyMarshalsAsArray(t *testing.T) {
-	p := apiv1.Process{AllowedCPUs: []int{}}
+func TestBuildContainer(t *testing.T) {
+	tests := []struct {
+		name     string
+		res      crictlResources
+		gpuCount int
+		wantNil  bool
+		wantReqs apiv1.ResourceList
+		wantLims apiv1.ResourceList
+	}{
+		{
+			name:    "no observable values returns nil",
+			res:     crictlResources{},
+			wantNil: true,
+		},
+		{
+			name:     "only GPU count produces nvidia.com/gpu limit",
+			gpuCount: 2,
+			wantLims: apiv1.ResourceList{"nvidia.com/gpu": "2"},
+		},
+		{
+			name: "full pod spec rendering",
+			res: crictlResources{
+				CPUShares:          4096, // 4 cores request
+				CPUQuota:           800000,
+				CPUPeriod:          100000, // 8 cores limit
+				MemoryLimitInBytes: 16 << 30,
+			},
+			gpuCount: 1,
+			wantReqs: apiv1.ResourceList{"cpu": "4"},
+			wantLims: apiv1.ResourceList{
+				"cpu":            "8",
+				"memory":         "16Gi",
+				"nvidia.com/gpu": "1",
+			},
+		},
+		{
+			name:     "fractional cpu request renders as millicores",
+			res:      crictlResources{CPUShares: 512}, // 0.5 cores
+			wantReqs: apiv1.ResourceList{"cpu": "500m"},
+		},
+		{
+			name:     "no observed GPUs -> no nvidia.com/gpu limit",
+			res:      crictlResources{CPUShares: 1024},
+			gpuCount: 0,
+			wantReqs: apiv1.ResourceList{"cpu": "1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildContainer(tt.res, tt.gpuCount)
+			if tt.wantNil {
+				if got != nil {
+					t.Fatalf("got = %+v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("got = nil, want non-nil")
+			}
+			if !mapsEqual(got.Resources.Requests, tt.wantReqs) {
+				t.Errorf("requests = %v, want %v", got.Resources.Requests, tt.wantReqs)
+			}
+			if !mapsEqual(got.Resources.Limits, tt.wantLims) {
+				t.Errorf("limits = %v, want %v", got.Resources.Limits, tt.wantLims)
+			}
+		})
+	}
+}
+
+func mapsEqual(a, b apiv1.ResourceList) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// TestAffinityCPUsEmptyMarshalsAsArray pins the contract that an empty
+// affinity CPU slice marshals to `[]`, not `null`.
+func TestAffinityCPUsEmptyMarshalsAsArray(t *testing.T) {
+	p := apiv1.Process{Affinity: apiv1.Affinity{CPUs: []int{}}}
 	data, err := json.Marshal(p)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if !strings.Contains(string(data), `"allowedCpus":[]`) {
-		t.Errorf("expected allowedCpus to marshal as []; got: %s", string(data))
+	if !strings.Contains(string(data), `"cpus":[]`) {
+		t.Errorf("expected cpus to marshal as []; got: %s", string(data))
 	}
 }
 
@@ -244,19 +350,11 @@ func TestProcessReportOmitsAbsentSections(t *testing.T) {
 			NumacheckVersion: "v0.5.0",
 			PID:              42,
 		},
-		Machine: apiv1.Machine{
-			CPU:    apiv1.CPUSummary{Total: 1},
-			Memory: &apiv1.Memory{TotalBytes: 1024},
-			NUMANodes: []apiv1.NUMANode{
-				{ID: 0, CPUs: []int{0}},
+		Data: apiv1.ProcessData{
+			Process: apiv1.Process{
+				Placement: apiv1.Placement{CurrentCPU: 0, CurrentNUMANode: 0, Pinned: false},
+				Affinity:  apiv1.Affinity{CPUs: []int{0}},
 			},
-		},
-		Process: &apiv1.Process{
-			CurrentCPU:      0,
-			CurrentNUMANode: 0,
-			AllowedCPUs:     []int{0},
-			AllowedCPUCount: 1,
-			SystemCPUCount:  1,
 		},
 	}
 	data, err := json.Marshal(out)
@@ -267,10 +365,8 @@ func TestProcessReportOmitsAbsentSections(t *testing.T) {
 
 	mustOmit := []string{
 		`"pod"`, `"container"`,
-		`"gpus"`, `"cpuManager"`,
-		`"containerResources"`,
-		`"memoryPerNumaNode"`, `"allowedGpus"`,
-		`"memoryBytes"`,
+		`"gpus"`, `"memory"`,
+		`"machine"`,
 	}
 	for _, k := range mustOmit {
 		if strings.Contains(s, k) {
@@ -279,16 +375,13 @@ func TestProcessReportOmitsAbsentSections(t *testing.T) {
 	}
 }
 
-// TestRunTopoOnlyJSONWiring exercises the JSON construction path end-to-end
-// from a stubbed FileSystem so a field/source rename in main.go cannot slip
-// through (the other tests in this file build structs by hand).
 func TestRunTopoOnlyJSONWiring(t *testing.T) {
 	fs := &mockFS{
 		files: map[string]string{
-			"/sys/devices/system/node/node0/cpulist":                   "0-1",
-			"/sys/devices/system/node/node1/cpulist":                   "2-3",
-			"/sys/devices/system/node/node0/meminfo":                   "Node 0 MemTotal:     65536 kB\nNode 0 MemFree:      32768 kB\n",
-			"/sys/devices/system/node/node1/meminfo":                   "Node 1 MemTotal:     65536 kB\nNode 1 MemFree:      16384 kB\n",
+			"/sys/devices/system/node/node0/cpulist":                    "0-1",
+			"/sys/devices/system/node/node1/cpulist":                    "2-3",
+			"/sys/devices/system/node/node0/meminfo":                    "Node 0 MemTotal:     65536 kB\nNode 0 MemFree:      32768 kB\n",
+			"/sys/devices/system/node/node1/meminfo":                    "Node 1 MemTotal:     65536 kB\nNode 1 MemFree:      16384 kB\n",
 			"/sys/devices/system/cpu/cpu0/topology/physical_package_id": "0",
 			"/sys/devices/system/cpu/cpu0/topology/core_id":             "0",
 			"/sys/devices/system/cpu/cpu1/topology/physical_package_id": "0",
@@ -303,11 +396,10 @@ func TestRunTopoOnlyJSONWiring(t *testing.T) {
 				"/sys/devices/system/node/node0",
 				"/sys/devices/system/node/node1",
 			},
-			// No PCI devices -> discoverGPUs returns nil, no error.
 			"/sys/bus/pci/devices/*": {},
 		},
 	}
-	cmd := &mockCmd{} // unused: no nvidia-smi call when PCI glob is empty.
+	cmd := &mockCmd{}
 
 	out := captureStdout(t, func() {
 		if err := runTopoOnly(fs, cmd, true, ""); err != nil {
@@ -321,12 +413,13 @@ func TestRunTopoOnlyJSONWiring(t *testing.T) {
 	}
 
 	checks := map[string]any{
-		"apiVersion":                "numacheck/v1",
-		"kind":                      "MachineTopology",
-		"machine.cpu.total":         float64(4),
-		"machine.cpu.physicalCores": float64(4), // 2 cores per socket × 2 sockets
-		"machine.cpu.sockets":       float64(2),
-		"machine.memory.totalBytes": float64(2 * 65536 * 1024),
+		"apiVersion":                       "numacheck/v1",
+		"kind":                             "MachineTopology",
+		"data.resources.cpu.logicalCores":  float64(4),
+		"data.resources.cpu.physicalCores": float64(4),
+		"data.resources.cpu.sockets":       float64(2),
+		"data.resources.memory.totalBytes": float64(2 * 65536 * 1024),
+		"data.resources.memory.freeBytes":  float64((32768 + 16384) * 1024),
 	}
 	for path, want := range checks {
 		if got := getPath(m, path); got != want {
@@ -334,7 +427,6 @@ func TestRunTopoOnlyJSONWiring(t *testing.T) {
 		}
 	}
 
-	// metadata.host should be present (possibly empty if os.Hostname fails).
 	if _, ok := getPath(m, "metadata").(map[string]any)["host"]; !ok {
 		t.Errorf("metadata.host key missing: %s", out)
 	}
@@ -346,8 +438,7 @@ func TestRunTopoOnlyJSONWiring(t *testing.T) {
 		t.Errorf("metadata.numacheckVersion = %v, want %v", got, version)
 	}
 
-	// numaNodes should be ordered by ID with the expected CPU sets.
-	nodes, _ := getPath(m, "machine.numaNodes").([]any)
+	nodes, _ := getPath(m, "data.numaNodes").([]any)
 	if len(nodes) != 2 {
 		t.Fatalf("expected 2 numaNodes, got %d (out=%s)", len(nodes), out)
 	}
@@ -368,11 +459,106 @@ func TestRunTopoOnlyJSONWiring(t *testing.T) {
 	if got := getPath(node0, "memory.freeBytes"); got != float64(32768*1024) {
 		t.Errorf("numaNodes[0].memory.freeBytes = %v", got)
 	}
+	if _, present := node0["gpus"]; present {
+		t.Errorf("numaNodes[0].gpus should be omitted when no GPUs; got present in %s", out)
+	}
 }
 
-// TestBuildMetadata pins the basic shape of jsonMetadata produced by
-// buildMetadata: RFC3339 timestamp, version wired through, hostname present.
-// Swaps the hostnameFn/nowFn seams so timestamp and host are deterministic.
+func intPtr(v int) *int { return &v }
+
+func TestNUMAAlignment(t *testing.T) {
+	numaMap := map[int]int{
+		0: 0, 1: 0, 2: 0, 3: 0,
+		4: 1, 5: 1, 6: 1, 7: 1,
+	}
+	gpus := []GPUDevice{
+		{Index: 0, UUID: "GPU-node0", NUMANode: 0},
+		{Index: 1, UUID: "GPU-node1", NUMANode: 1},
+	}
+
+	tests := []struct {
+		name        string
+		allowedCPUs []int
+		allowedGPUs map[string]bool
+		wantAligned bool
+		wantNode    *int
+	}{
+		{
+			name:        "empty allowed CPUs",
+			allowedCPUs: []int{},
+			wantAligned: false,
+		},
+		{
+			name:        "all CPUs on node 0, no GPU env",
+			allowedCPUs: []int{0, 1, 2, 3},
+			allowedGPUs: nil,
+			wantAligned: true,
+			wantNode:    intPtr(0),
+		},
+		{
+			name:        "all CPUs on node 1, no GPU env",
+			allowedCPUs: []int{4, 5, 6, 7},
+			allowedGPUs: nil,
+			wantAligned: true,
+			wantNode:    intPtr(1),
+		},
+		{
+			name:        "CPUs spread across nodes",
+			allowedCPUs: []int{0, 1, 4, 5},
+			allowedGPUs: nil,
+			wantAligned: false,
+		},
+		{
+			name:        "CPUs on node 0, allowed GPU on node 0",
+			allowedCPUs: []int{0, 1},
+			allowedGPUs: map[string]bool{"GPU-node0": true},
+			wantAligned: true,
+			wantNode:    intPtr(0),
+		},
+		{
+			name:        "CPUs on node 0, allowed GPU on node 1",
+			allowedCPUs: []int{0, 1},
+			allowedGPUs: map[string]bool{"GPU-node1": true},
+			wantAligned: false,
+		},
+		{
+			name:        "CPUs aligned, no GPUs allowed (empty set)",
+			allowedCPUs: []int{0, 1},
+			allowedGPUs: map[string]bool{},
+			wantAligned: true,
+			wantNode:    intPtr(0),
+		},
+		{
+			name:        "CPU not in numaMap",
+			allowedCPUs: []int{99},
+			wantAligned: false,
+		},
+		{
+			name:        "allowed GPU UUID not in host gpus",
+			allowedCPUs: []int{0},
+			allowedGPUs: map[string]bool{"GPU-unknown": true},
+			wantAligned: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			aligned, node := numaAlignment(tt.allowedCPUs, numaMap, tt.allowedGPUs, gpus)
+			if aligned != tt.wantAligned {
+				t.Errorf("aligned = %v, want %v", aligned, tt.wantAligned)
+			}
+			switch {
+			case tt.wantNode == nil && node != nil:
+				t.Errorf("node = %v, want nil", *node)
+			case tt.wantNode != nil && node == nil:
+				t.Errorf("node = nil, want %v", *tt.wantNode)
+			case tt.wantNode != nil && node != nil && *node != *tt.wantNode:
+				t.Errorf("node = %v, want %v", *node, *tt.wantNode)
+			}
+		})
+	}
+}
+
 func TestBuildMetadata(t *testing.T) {
 	origHostname := hostnameFn
 	origNow := nowFn
@@ -398,8 +584,6 @@ func TestBuildMetadata(t *testing.T) {
 	if md.NumacheckVersion != version {
 		t.Errorf("NumacheckVersion = %q, want %q", md.NumacheckVersion, version)
 	}
-	// PID/Pod/Container are zero values here since buildMetadata only sets the
-	// three fields above.
 	if md.PID != 0 || md.Pod != "" || md.Container != "" {
 		t.Errorf("expected PID/Pod/Container zero, got pid=%d pod=%q container=%q",
 			md.PID, md.Pod, md.Container)

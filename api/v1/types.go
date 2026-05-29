@@ -17,8 +17,8 @@ type Metadata struct {
 	Container        string `json:"container,omitempty"`
 }
 
-type CPUSummary struct {
-	Total         int `json:"total"`
+type CPU struct {
+	LogicalCores  int `json:"logicalCores"`
 	PhysicalCores int `json:"physicalCores"`
 	Sockets       int `json:"sockets"`
 }
@@ -28,18 +28,25 @@ type Memory struct {
 	FreeBytes  int64 `json:"freeBytes,omitempty"`
 }
 
-type NUMANode struct {
-	ID       int     `json:"id"`
-	SocketID int     `json:"socketId"`
-	CPUs     []int   `json:"cpus"`
-	Memory   *Memory `json:"memory,omitempty"`
-}
-
 type GPU struct {
 	Index    int    `json:"index"`
 	UUID     string `json:"uuid,omitempty"`
 	PCIID    string `json:"pciId"`
 	NUMANode int    `json:"numaNode"`
+}
+
+type MachineResources struct {
+	CPU    CPU     `json:"cpu"`
+	Memory *Memory `json:"memory,omitempty"`
+	GPUs   []GPU   `json:"gpus,omitempty"`
+}
+
+type NUMANode struct {
+	ID       int     `json:"id"`
+	SocketID int     `json:"socketId"`
+	CPUs     []int   `json:"cpus"`
+	GPUs     []int   `json:"gpus,omitempty"`
+	Memory   *Memory `json:"memory,omitempty"`
 }
 
 type CPUManagerEntry struct {
@@ -62,19 +69,16 @@ type CPUManager struct {
 	PerNUMANode []CPUManagerNUMANode `json:"perNumaNode,omitempty"`
 }
 
-type Resources struct {
-	CPURequestCores  *float64 `json:"cpuRequestCores,omitempty"`
-	CPULimitCores    *float64 `json:"cpuLimitCores,omitempty"`
-	MemoryLimitBytes *int64   `json:"memoryLimitBytes,omitempty"`
-	GPUCount         int      `json:"gpuCount,omitempty"`
+type MachineData struct {
+	Resources  MachineResources `json:"resources"`
+	NUMANodes  []NUMANode       `json:"numaNodes"`
+	CPUManager *CPUManager      `json:"cpuManager,omitempty"`
 }
 
-type Machine struct {
-	CPU        CPUSummary  `json:"cpu"`
-	Memory     *Memory     `json:"memory,omitempty"`
-	NUMANodes  []NUMANode  `json:"numaNodes"`
-	GPUs       []GPU       `json:"gpus,omitempty"`
-	CPUManager *CPUManager `json:"cpuManager,omitempty"`
+type Placement struct {
+	CurrentCPU      int  `json:"currentCpu"`
+	CurrentNUMANode int  `json:"currentNumaNode"`
+	Pinned          bool `json:"pinned"`
 }
 
 type ProcessMemPerNode struct {
@@ -82,30 +86,52 @@ type ProcessMemPerNode struct {
 	Bytes int64 `json:"bytes"`
 }
 
+type ProcessMemory struct {
+	Bytes       int64               `json:"bytes,omitempty"`
+	PerNUMANode []ProcessMemPerNode `json:"perNumaNode,omitempty"`
+}
+
+type Affinity struct {
+	CPUs        []int          `json:"cpus"`
+	GPUs        []string       `json:"gpus,omitempty"`
+	Memory      *ProcessMemory `json:"memory,omitempty"`
+	NUMAAligned bool           `json:"numaAligned"`
+	NUMANode    *int           `json:"numaNode,omitempty"`
+}
+
+// ResourceList mirrors k8s ResourceList: a map of resource name to a
+// resource.Quantity string (e.g., "4", "500m", "16Gi", "1").
+type ResourceList map[string]string
+
+type ContainerResources struct {
+	Requests ResourceList `json:"requests,omitempty"`
+	Limits   ResourceList `json:"limits,omitempty"`
+}
+
+type Container struct {
+	Resources ContainerResources `json:"resources"`
+}
+
 type Process struct {
-	CurrentCPU         int                 `json:"currentCpu"`
-	CurrentNUMANode    int                 `json:"currentNumaNode"`
-	AllowedCPUs        []int               `json:"allowedCpus"`
-	AllowedCPUCount    int                 `json:"allowedCpuCount"`
-	SystemCPUCount     int                 `json:"systemCpuCount,omitempty"`
-	Pinned             bool                `json:"pinned"`
-	MemoryBytes        int64               `json:"memoryBytes,omitempty"`
-	AllowedGPUs        []string            `json:"allowedGpus,omitempty"`
-	MemoryPerNUMANode  []ProcessMemPerNode `json:"memoryPerNumaNode,omitempty"`
-	ContainerResources *Resources          `json:"containerResources,omitempty"`
+	Placement Placement  `json:"placement"`
+	Affinity  Affinity   `json:"affinity"`
+	Container *Container `json:"container,omitempty"`
+}
+
+type ProcessData struct {
+	Process Process `json:"process"`
 }
 
 type MachineTopology struct {
-	APIVersion string   `json:"apiVersion"`
-	Kind       string   `json:"kind"`
-	Metadata   Metadata `json:"metadata"`
-	Machine    Machine  `json:"machine"`
+	APIVersion string      `json:"apiVersion"`
+	Kind       string      `json:"kind"`
+	Metadata   Metadata    `json:"metadata"`
+	Data       MachineData `json:"data"`
 }
 
 type ProcessReport struct {
-	APIVersion string   `json:"apiVersion"`
-	Kind       string   `json:"kind"`
-	Metadata   Metadata `json:"metadata"`
-	Machine    Machine  `json:"machine"`
-	Process    *Process `json:"process,omitempty"`
+	APIVersion string      `json:"apiVersion"`
+	Kind       string      `json:"kind"`
+	Metadata   Metadata    `json:"metadata"`
+	Data       ProcessData `json:"data"`
 }

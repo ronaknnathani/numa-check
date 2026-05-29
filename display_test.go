@@ -479,9 +479,11 @@ func TestJSONTopoOutputContainsMemory(t *testing.T) {
 		APIVersion: "numacheck/v1",
 		Kind:       "MachineTopology",
 		Metadata:   apiv1.Metadata{Timestamp: "2026-05-25T19:30:00Z", NumacheckVersion: "test"},
-		Machine: apiv1.Machine{
-			CPU:    apiv1.CPUSummary{Total: 4, PhysicalCores: 2, Sockets: 1},
-			Memory: &apiv1.Memory{TotalBytes: 8 * 1024 * 1024 * 1024},
+		Data: apiv1.MachineData{
+			Resources: apiv1.MachineResources{
+				CPU:    apiv1.CPU{LogicalCores: 4, PhysicalCores: 2, Sockets: 1},
+				Memory: &apiv1.Memory{TotalBytes: 8 * 1024 * 1024 * 1024},
+			},
 			NUMANodes: []apiv1.NUMANode{
 				{ID: 0, SocketID: 0, CPUs: []int{0, 1, 2, 3},
 					Memory: &apiv1.Memory{TotalBytes: 8 * 1024 * 1024 * 1024, FreeBytes: 4 * 1024 * 1024 * 1024}},
@@ -493,7 +495,7 @@ func TestJSONTopoOutputContainsMemory(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	s := string(data)
-	for _, want := range []string{`"totalBytes"`, `"freeBytes"`, `"machine"`, `"memory"`} {
+	for _, want := range []string{`"totalBytes"`, `"freeBytes"`, `"data"`, `"memory"`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("JSON missing %s: %s", want, s)
 		}

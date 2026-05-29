@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -238,7 +239,7 @@ func buildTopoJSON(fs FileSystem, cmd CommandRunner, cpuManagerPath string) (api
 		APIVersion: "numacheck/v1",
 		Kind:       "MachineTopology",
 		Metadata:   buildMetadata(),
-		Machine:    buildMachine(fs, numaMap, nodes, gpus, cpuMgrState, cpuMgrEntries),
+		Data:       buildMachineData(fs, numaMap, nodes, gpus, cpuMgrState, cpuMgrEntries),
 	}, nil
 }
 
@@ -326,27 +327,30 @@ func runAnalysis(fs FileSystem, cmd CommandRunner, pid int, jsonOut bool, contai
 			affinityList = []int{}
 		}
 
+		aligned, alignedNode := numaAlignment(affinityList, numaMap, allowedGPUs, gpus)
+		proc := apiv1.Process{
+			Placement: apiv1.Placement{
+				CurrentCPU:      currentCPU,
+				CurrentNUMANode: cpuNUMANode,
+				Pinned:          pinned,
+			},
+			Affinity: apiv1.Affinity{
+				CPUs:        affinityList,
+				GPUs:        sortedKeys(allowedGPUs),
+				Memory:      buildProcessMemory(nodes, processMem),
+				NUMAAligned: aligned,
+				NUMANode:    alignedNode,
+			},
+		}
+		if containerRes != nil {
+			proc.Container = buildContainer(*containerRes, allowedGPUCount(allowedGPUs))
+		}
+
 		out := apiv1.ProcessReport{
 			APIVersion: "numacheck/v1",
 			Kind:       "ProcessReport",
 			Metadata:   md,
-			Machine:    buildMachine(fs, numaMap, nodes, gpus, cpuMgrState, cpuMgrEntries),
-			Process: &apiv1.Process{
-				CurrentCPU:        currentCPU,
-				CurrentNUMANode:   cpuNUMANode,
-				AllowedCPUs:       affinityList,
-				AllowedCPUCount:   len(affinityList),
-				Pinned:            pinned,
-				MemoryBytes:       sumProcessMem(processMem),
-				AllowedGPUs:       mapKeys(allowedGPUs),
-				MemoryPerNUMANode: toAPIProcessMemPerNode(nodes, processMem),
-			},
-		}
-		if systemCPUErr == nil {
-			out.Process.SystemCPUCount = systemCPUs
-		}
-		if containerRes != nil {
-			out.Process.ContainerResources = toAPIResources(*containerRes, gpuCount(allowedGPUs, gpus, gpuEnvErr))
+			Data:       apiv1.ProcessData{Process: proc},
 		}
 		printJSON(out)
 		return
@@ -439,34 +443,50 @@ func sumProcessMem(processMem map[int]int64) int64 {
 	return total
 }
 
-func toAPINodes(nodes []NUMANodeInfo) []apiv1.NUMANode {
+// sumNodeMemFrees returns the sum of MemFreeBytes across nodes.
+func sumNodeMemFrees(nodes []NUMANodeInfo) int64 {
+	var total int64
+	for _, n := range nodes {
+		total += n.MemFreeBytes
+	}
+	return total
+}
+
+// gpusByNode returns a map from NUMA node ID -> sorted list of GPU indexes.
+func gpusByNode(gpus []GPUDevice) map[int][]int {
+	if len(gpus) == 0 {
+		return nil
+	}
+	out := make(map[int][]int)
+	for _, g := range gpus {
+		out[g.NUMANode] = append(out[g.NUMANode], g.Index)
+	}
+	for k := range out {
+		sort.Ints(out[k])
+	}
+	return out
+}
+
+func toAPINodes(nodes []NUMANodeInfo, gpus []GPUDevice) []apiv1.NUMANode {
+	gpuIdx := gpusByNode(gpus)
 	out := make([]apiv1.NUMANode, len(nodes))
 	for i, n := range nodes {
+		cpus := n.CPUs
+		if cpus == nil {
+			cpus = []int{}
+		}
 		jn := apiv1.NUMANode{
 			ID:       n.ID,
 			SocketID: n.SocketID,
-			CPUs:     n.CPUs,
+			CPUs:     cpus,
+		}
+		if idxs, ok := gpuIdx[n.ID]; ok {
+			jn.GPUs = idxs
 		}
 		if n.MemTotalBytes != 0 || n.MemFreeBytes != 0 {
 			jn.Memory = &apiv1.Memory{TotalBytes: n.MemTotalBytes, FreeBytes: n.MemFreeBytes}
 		}
 		out[i] = jn
-	}
-	return out
-}
-
-func toAPIProcessMemPerNode(nodes []NUMANodeInfo, processMem map[int]int64) []apiv1.ProcessMemPerNode {
-	if processMem == nil {
-		return nil
-	}
-	out := make([]apiv1.ProcessMemPerNode, 0, len(nodes))
-	for _, n := range nodes {
-		if b, ok := processMem[n.ID]; ok {
-			out = append(out, apiv1.ProcessMemPerNode{ID: n.ID, Bytes: b})
-		}
-	}
-	if len(out) == 0 {
-		return nil
 	}
 	return out
 }
@@ -482,34 +502,91 @@ func toAPIGPUs(gpus []GPUDevice) []apiv1.GPU {
 	return out
 }
 
-func toAPIResources(res crictlResources, gc int) *apiv1.Resources {
-	jr := &apiv1.Resources{}
-	hasContent := false
-	if res.CPUShares > 2 {
-		v := float64(res.CPUShares) / 1024
-		jr.CPURequestCores = &v
-		hasContent = true
+// numaAlignment reports whether every allowed CPU and every allowed GPU
+// resides on the same NUMA node. When aligned, returns (true, &node);
+// otherwise (false, nil). allowedGPUs == nil means we couldn't read the
+// container's GPU env, so GPUs are skipped and alignment is decided on CPUs
+// alone.
+func numaAlignment(allowedCPUs []int, numaMap map[int]int, allowedGPUs map[string]bool, gpus []GPUDevice) (bool, *int) {
+	if len(allowedCPUs) == 0 {
+		return false, nil
 	}
-	if res.CPUQuota > 0 && res.CPUPeriod > 0 {
-		v := float64(res.CPUQuota) / float64(res.CPUPeriod)
-		jr.CPULimitCores = &v
-		hasContent = true
+	node, ok := numaMap[allowedCPUs[0]]
+	if !ok {
+		return false, nil
 	}
-	if res.MemoryLimitInBytes > 0 {
-		jr.MemoryLimitBytes = &res.MemoryLimitInBytes
-		hasContent = true
+	for _, cpu := range allowedCPUs[1:] {
+		if n, ok := numaMap[cpu]; !ok || n != node {
+			return false, nil
+		}
 	}
-	if gc > 0 {
-		jr.GPUCount = gc
-		hasContent = true
+	if allowedGPUs != nil {
+		gpuNode := make(map[string]int, len(gpus))
+		for _, g := range gpus {
+			gpuNode[g.UUID] = g.NUMANode
+		}
+		for uuid := range allowedGPUs {
+			if n, ok := gpuNode[uuid]; !ok || n != node {
+				return false, nil
+			}
+		}
 	}
-	if !hasContent {
-		return nil
-	}
-	return jr
+	return true, &node
 }
 
-func buildMachine(fs FileSystem, numaMap map[int]int, nodes []NUMANodeInfo, gpus []GPUDevice, cpuMgrState *KubeletCPUManagerState, cpuMgrEntries []KubeletCPUManagerEntry) apiv1.Machine {
+// buildProcessMemory returns a populated *ProcessMemory or nil when nothing
+// is observable. Returns nil only when processMem is nil or empty; a non-nil
+// return may have an empty PerNUMANode if no node IDs matched.
+func buildProcessMemory(nodes []NUMANodeInfo, processMem map[int]int64) *apiv1.ProcessMemory {
+	if processMem == nil {
+		return nil
+	}
+	pm := &apiv1.ProcessMemory{Bytes: sumProcessMem(processMem)}
+	for _, n := range nodes {
+		if b, ok := processMem[n.ID]; ok {
+			pm.PerNUMANode = append(pm.PerNUMANode, apiv1.ProcessMemPerNode{ID: n.ID, Bytes: b})
+		}
+	}
+	if pm.Bytes == 0 && len(pm.PerNUMANode) == 0 {
+		return nil
+	}
+	return pm
+}
+
+// buildContainer converts crictl-derived container limits/requests into the
+// k8s-shaped Container block. Returns nil when nothing is observable.
+func buildContainer(res crictlResources, gc int) *apiv1.Container {
+	requests := apiv1.ResourceList{}
+	limits := apiv1.ResourceList{}
+
+	if res.CPUShares > 2 {
+		requests["cpu"] = apiv1.FormatCPUQuantity(float64(res.CPUShares) / 1024)
+	}
+	if res.CPUQuota > 0 && res.CPUPeriod > 0 {
+		limits["cpu"] = apiv1.FormatCPUQuantity(float64(res.CPUQuota) / float64(res.CPUPeriod))
+	}
+	if res.MemoryLimitInBytes > 0 {
+		limits["memory"] = apiv1.FormatMemoryQuantity(res.MemoryLimitInBytes)
+	}
+	if gc > 0 {
+		limits["nvidia.com/gpu"] = apiv1.FormatIntQuantity(int64(gc))
+	}
+
+	if len(requests) == 0 && len(limits) == 0 {
+		return nil
+	}
+
+	c := &apiv1.Container{}
+	if len(requests) > 0 {
+		c.Resources.Requests = requests
+	}
+	if len(limits) > 0 {
+		c.Resources.Limits = limits
+	}
+	return c
+}
+
+func buildMachineData(fs FileSystem, numaMap map[int]int, nodes []NUMANodeInfo, gpus []GPUDevice, cpuMgrState *KubeletCPUManagerState, cpuMgrEntries []KubeletCPUManagerEntry) apiv1.MachineData {
 	allCores := make(map[CoreInfo]bool)
 	for cpu := range numaMap {
 		if info, err := getCPUTopology(fs, cpu); err == nil {
@@ -523,22 +600,27 @@ func buildMachine(fs FileSystem, numaMap map[int]int, nodes []NUMANodeInfo, gpus
 		}
 	}
 
-	m := apiv1.Machine{
-		CPU: apiv1.CPUSummary{
-			Total:         len(numaMap),
-			PhysicalCores: len(allCores),
-			Sockets:       len(totalSockets),
+	data := apiv1.MachineData{
+		Resources: apiv1.MachineResources{
+			CPU: apiv1.CPU{
+				LogicalCores:  len(numaMap),
+				PhysicalCores: len(allCores),
+				Sockets:       len(totalSockets),
+			},
+			GPUs: toAPIGPUs(gpus),
 		},
-		NUMANodes: toAPINodes(nodes),
-		GPUs:      toAPIGPUs(gpus),
+		NUMANodes: toAPINodes(nodes, gpus),
 	}
 	if total := sumNodeMemTotals(nodes); total != 0 {
-		m.Memory = &apiv1.Memory{TotalBytes: total}
+		data.Resources.Memory = &apiv1.Memory{
+			TotalBytes: total,
+			FreeBytes:  sumNodeMemFrees(nodes),
+		}
 	}
 	if cpuMgrState != nil {
-		m.CPUManager = toAPICPUManager(cpuMgrState, cpuMgrEntries, nodes)
+		data.CPUManager = toAPICPUManager(cpuMgrState, cpuMgrEntries, nodes)
 	}
-	return m
+	return data
 }
 
 func buildMetadata() apiv1.Metadata {
@@ -564,7 +646,16 @@ func gpuCount(allowedGPUs map[string]bool, gpus []GPUDevice, envErr bool) int {
 	return 0
 }
 
-func mapKeys(m map[string]bool) []string {
+// allowedGPUCount returns the number of GPUs we observed the container was
+// allowed to use. Returns 0 when allowedGPUs is nil (i.e., we couldn't read
+// the container's GPU env), avoiding over-attribution of host GPUs to the
+// container's nvidia.com/gpu limit.
+func allowedGPUCount(allowedGPUs map[string]bool) int {
+	return len(allowedGPUs)
+}
+
+// sortedKeys returns the map's keys in sorted order, or nil if the map is empty.
+func sortedKeys(m map[string]bool) []string {
 	if len(m) == 0 {
 		return nil
 	}
@@ -572,6 +663,7 @@ func mapKeys(m map[string]bool) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 	return keys
 }
 
